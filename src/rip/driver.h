@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: MIT
+
+// The generic driver: a small program in RDRAM that calls game functions with a track's number. A profile uses it
+// where the game has no song-select call to stop at, such as a set of sound effects. BuildCallDriver writes the
+// program's instruction words with a small MIPS encoder (mips.h).
+//
+// The driver runs in the thread that reached the snapshot point (profile.h). It reads the number from its track word
+// once: all 32 bits of it. It makes the start calls in order, once. Then, for ever, it makes the frame calls in order
+// and waits for the next frame. Without frame calls or a wait, it ends in an idle loop. Each call may be limited to
+// some tracks, and a frame call to a range of frames.
+//
+// Calls follow the O32 convention of libultra's games: up to four arguments in a0 to a3, the return address in ra,
+// the function's address in t9, and 16 bytes of argument space at the bottom of the caller's stack frame. The driver
+// keeps the number in s0 and counts the frames in s1. The callee preserves both.
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "rip/profile.h"
+
+namespace usf::rip
+{
+
+// One argument of a call: the constant `value`, or with `track` set, the track's number shifted left by `shift` and
+// ORed with `value`. A track's number may hold two fields: `right_shift` and `mask` pick one out before the left shift.
+// With `result` set, the argument is the value that the previous call returned.
+struct CallArgument
+{
+    uint32_t value = 0;
+    bool track = false;
+    int shift = 0;
+    int right_shift = 0;
+    uint16_t mask = 0;
+    bool result = false;
+};
+
+// A call of the function at `function`, with at most four arguments.
+struct GameCall
+{
+    uint32_t function = 0;
+    std::vector<CallArgument> arguments;
+
+    // The driver makes the call only for a track whose number gives (number & track_mask) == track_value. The
+    // defaults make it for every track.
+    uint32_t track_mask = 0;
+    uint32_t track_value = 0;
+
+    // A frame call is made only from frame `first_frame` on, and only in the first `frames` frames. Frame 0 is the
+    // first after the start calls. `frames` 0 makes no end.
+    uint32_t first_frame = 0;
+    uint32_t frames = 0;
+};
+
+struct CallDriverOptions
+{
+    // Where the driver goes, in KSEG0. It takes about 40 bytes for each call, and 4 bytes at its end for its track
+    // word. Choose RDRAM that the game never uses.
+    uint32_t address = 0;
+
+    std::vector<GameCall> start_calls;
+    std::vector<GameCall> frame_calls;
+
+    // How the driver waits for the next frame. With `wait_call`, it calls a function of the game that waits, such as
+    // osRecvMesg on the queue that the game's scheduler sends each retrace to. Without one, it polls VI_CURRENT until
+    // a new field starts. A frame is `fields` video fields.
+    std::optional<GameCall> wait_call;
+    int fields = 1;
+};
+
+// The driver for `options`. Throws std::invalid_argument for a call with more than four arguments, a shift outside
+// 0 to 31, a driver's address outside KSEG0, or an address that isn't word-aligned.
+Driver BuildCallDriver(const CallDriverOptions& options);
+
+} // namespace usf::rip

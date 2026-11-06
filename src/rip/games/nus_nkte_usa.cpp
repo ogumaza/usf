@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MIT
+
+// Mario Kart 64 (USA): the game's music, played through the sound engine that Super Mario 64 also uses. This is a
+// later revision of it, with a queue of commands from the game thread to the audio thread.
+//
+// Addresses come from the game's code in the image and from runs in usf's core. The main segment is copied from
+// cartridge offset 0x1000 to 0x80000400.
+//
+// - The sequence table at cartridge offset 0xBC5F60 holds 30 sequences. The audio set-up at 0x800C5C40 starts
+//   sequence 0 on sequence player 2 (through 0x800C284C, at 0x800C5C94), for the sound effects. The other 29 are the
+//   tracks.
+// - The play-sequence function at 0x800C8EAC takes a sequence's number in a0. It queues command 0x00010000 with the
+//   number through 0x800C3448, which starts the sequence on sequence player 0.
+// - The game-loop tick at 0x800CB2C4 takes no arguments. It sends the queued commands to the audio thread through
+//   0x800CBC24. The game thread (0x801589D0, created at 0x800024F4) calls it from its loop at 0x8000277C, once a
+//   frame, every second video field.
+// - The tick's first call comes before any sound. The game then resets the audio and first plays sequence 1 on the
+//   title screen.
+// - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x800C0C54 to
+//   0x800C0CA8. At 0x800C0CA4 the new script address is in t3 and the sequence player in s1.
+
+#include <cstdio>
+
+#include "rip/driver.h"
+#include "rip/games/games.h"
+
+namespace usf::rip::games
+{
+
+namespace
+{
+
+constexpr uint32_t kPlaySequence = 0x800C8EAC;
+constexpr uint32_t kGameLoopTick = 0x800CB2C4;
+constexpr uint32_t kSequenceJump = 0x800C0CA4;
+
+// The last lines of the frame buffer at 0x803DA800 to 0x80400000. Runs of the game hold zeros there. Only the RDP
+// writes there, and it draws nothing after the snapshot.
+constexpr uint32_t kDriverAddress = 0x803FF000;
+
+constexpr int kSequences = 30;
+
+const char* TrackName(int index)
+{
+    switch (index)
+    {
+    case 0x01:
+        return "Sequence 0x01: title screen";
+    default:
+        return nullptr;
+    }
+}
+
+} // namespace
+
+GameProfile NusNkteUsa()
+{
+    GameProfile profile;
+    profile.game = "Mario Kart 64";
+    profile.serial = "NUS-NKTE-USA";
+    profile.sha1 = "579c48e211ae952530ffc8738709f078d5dd215e";
+    profile.year = "1997";
+    profile.cic = n64::Cic::k6102;
+    profile.sound_driver = "Super Mario 64 sound engine";
+    profile.controller = true;
+    profile.eeprom = n64::EepromType::k4Kbit;
+
+    // The driver takes over the game thread at the tick's first call. It starts the track's sequence once, then runs
+    // the tick every second field, as the game does. Later calls of the tick aren't quiet: the audio thread keeps the
+    // AI's second buffer waiting, and the RSP runs the game's graphics.
+    profile.snapshot_address = kGameLoopTick;
+    profile.snapshot_hit = 1;
+    profile.quiet_tries = 2;
+    profile.boot_seconds = 5.0;
+
+    CallDriverOptions driver;
+    driver.address = kDriverAddress;
+    driver.start_calls = {{.function = kPlaySequence, .arguments = {{.track = true}}}};
+    driver.frame_calls = {{.function = kGameLoopTick}};
+    driver.fields = 2;
+    profile.driver = BuildCallDriver(driver);
+
+    // The sequence players run separate scripts. The player's address in s1 tells their jumps apart.
+    profile.loop_watches.push_back({.address = kSequenceJump, .target_register = 11, .track_register = 17});
+
+    for (int index = 1; index < kSequences; index++)
+    {
+        Track track;
+        track.number = static_cast<uint32_t>(index);
+        const char* name = TrackName(index);
+        char fallback[32];
+        std::snprintf(fallback, sizeof(fallback), "Sequence 0x%02X", index);
+        track.name = name != nullptr ? name : fallback;
+        profile.tracks.push_back(track);
+    }
+
+    return profile;
+}
+
+} // namespace usf::rip::games
