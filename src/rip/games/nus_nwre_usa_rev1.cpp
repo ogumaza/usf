@@ -19,6 +19,8 @@
 //   music function with sequence 3.
 // - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x800BEBE0 to
 //   0x800BEC34. At 0x800BEC30 the new script address is in t3 and the sequence player in s1.
+// - The reader handles the end of a counted loop (command 0xF7) at 0x800BEB98 and the relative jumps (commands 0xF2
+//   to 0xF4) at 0x800BEC38. The watch below doesn't see them.
 
 #include <cstdio>
 
@@ -40,6 +42,14 @@ constexpr uint32_t kSequenceJump = 0x800BEC30;
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
 constexpr int kSequences = 33;
+
+// Sequence 0x02 never repeats exactly, and the length analysis gave it the limit of 600 s. Its script jumps back every
+// 99.72 s, four of its channels repeat figures of 0.05 s and 0.4 s, and the rest of its music drifts. In a run of
+// 600 s, the music matches itself best 76.3 to 78.5 s later, and less closely each time. The measured length covers
+// two of those cycles from the first sound at 0.72 s.
+constexpr int kDriftingSequence = 0x02;
+constexpr double kDriftingSeconds = 157.0;
+constexpr double kFadeSeconds = 10.0;
 
 } // namespace
 
@@ -80,6 +90,11 @@ GameProfile NusNwreUsaRev1()
         char name[32];
         std::snprintf(name, sizeof(name), "Sequence 0x%02X", index);
         track.name = name;
+        if (index == kDriftingSequence)
+        {
+            track.length_seconds = kDriftingSeconds;
+            track.fade_seconds = kFadeSeconds;
+        }
         profile.tracks.push_back(track);
     }
 
