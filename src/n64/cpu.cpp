@@ -134,6 +134,7 @@ void Cpu::Reset()
     ll_bit_ = false;
     tlb_ = {};
     tlb_pages_ = system_.GetOptions().timing == Timing::kLegacy;
+    refused_board_pages_ = 0;
     read_pages_.Clear();
     write_pages_.Clear();
     ip2_stale_ = false;

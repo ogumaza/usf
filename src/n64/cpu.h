@@ -172,6 +172,11 @@ public:
     // exception. Returns nothing when the access would fault.
     std::optional<uint32_t> TranslateQuiet(uint64_t vaddr, bool write) const;
 
+    // With the legacy timing: the accesses since reset through a TLB entry that maps a frame past the console's
+    // physical addresses. An arcade board's games map pages there. The legacy players refuse such an entry, and the
+    // access faults.
+    uint64_t RefusedBoardPages() const;
+
     // Called by the system when the MI's interrupt line (Cause IP2) changes.
     void SetInterruptLine(uint32_t cause_bit, bool raised);
 
@@ -413,6 +418,7 @@ private:
                                  std::array<uint8_t, kMaxWaitRegisters>& out);
 
     TlbResult LookupTlbPages(uint64_t vaddr, bool write, uint32_t& paddr) const;
+    bool MapsPastPhysical(uint64_t vaddr) const;
     void UnmapTlbPages(const TlbEntry& entry);
     void MapTlbPages(const TlbEntry& entry);
     void SetAddressFields(uint64_t vaddr);
@@ -522,6 +528,7 @@ private:
     bool ll_bit_ = false;
     std::array<TlbEntry, 32> tlb_{};
     bool tlb_pages_ = false; // Translate through the tables, as the legacy players do.
+    uint64_t refused_board_pages_ = 0;
     PageTable read_pages_;
     PageTable write_pages_;
 

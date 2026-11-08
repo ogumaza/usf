@@ -116,6 +116,7 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
         run.reference.assign(hashes.Blocks().begin(), hashes.Blocks().begin() + static_cast<std::ptrdiff_t>(blocks));
     }
 
+    run.board_accesses = player.System().BoardAccesses();
     if (settings.coverage)
     {
         run.words = WordsOf(*player.System().GetCoverage(), RomImageSize(snapshot.rom.size()),

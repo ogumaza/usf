@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 // The functions that make each supported game's profile, one source file for each game in this folder, named by the
-// image's serial, region and revision (such as nus_ncte_usa_rev1.cpp). profiles.cpp lists them.
+// image's serial, region and revision (such as nus_ncte_usa_rev1.cpp). A further set of a game may have a file of its
+// own, with the set's name added (such as nus_nsme_usa_music.cpp). A game of an arcade board is named by the board and
+// the title (such as aleck64_hi_pai_paradise.cpp). profiles.cpp lists them.
 
 #pragma once
 
@@ -10,6 +12,18 @@
 namespace usf::rip::games
 {
 
+GameProfile Aleck64ElevenBeat();
+GameProfile Aleck64HanabiDeDoon();
+GameProfile Aleck64HiPaiParadise();
+GameProfile Aleck64HiPaiParadise2();
+GameProfile Aleck64KurukuruFever();
+GameProfile Aleck64MagicalTetrisChallenge();
+GameProfile Aleck64Mayjinsen3();
+GameProfile Aleck64StarSoldier();
+GameProfile Aleck64SuperRealMahjongVs();
+GameProfile Aleck64SuperRealMahjongVsStereo();
+GameProfile Aleck64TowerAndShaft();
+GameProfile Aleck64VividDolls();
 GameProfile NusCzleUsaRev2();
 GameProfile NusN2veUsa();
 GameProfile NusNcteUsaRev1();
@@ -24,7 +38,9 @@ GameProfile NusNpgeUsa();
 GameProfile NusNpneUsa();
 GameProfile NusNpoeUsaRev2();
 GameProfile NusNsmeUsa();
+GameProfile NusNsmeUsaMusic();
 GameProfile NusNwreUsaRev1();
+GameProfile NusNyseUsa();
 GameProfile NusNzseUsa();
 
 } // namespace usf::rip::games

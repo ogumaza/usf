@@ -6,22 +6,27 @@
 //
 // usage: usfrip [options] <image> [<image> ...]
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
 #include "xsflib/cli/rip.h"
 #include "xsflib/files.h"
 #include "xsflib/rip/file_names.h"
+#include "xsflib/rip/rom_set.h"
 #include "xsflib/rip/tool.h"
 #include "xsflib/sha1.h"
 
 #include "rip/profiles.h"
 #include "rip/rip.h"
+#include "rip/rom_set.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
 
@@ -36,20 +41,27 @@ using usf::rip::GameProfile;
 using usf::rip::Track;
 using usf::rip::TrackRun;
 
+// The extensions of a cartridge image's file, one for each of its three byte orders.
+constexpr std::string_view kImageExtensions[] = {".z64", ".v64", ".n64"};
+
 constexpr char kUsage[] =
     "usage: usfrip [options] <image> [<image> ...]\n"
     "\n"
     "Rips each Nintendo 64 image into a .usflib and a .miniusf for each track, in a folder next to it\n"
-    "that's named after it with \"_usf\" added. The image may be in any byte order (.z64, .v64 or\n"
-    ".n64). usfrip rips only games that it has a profile for, found by the image's SHA-1. It boots\n"
-    "the game, runs it to the profile's snapshot point and saves the state there. Each track then\n"
-    "runs from that state for its length analysis and for the coverage that trims the set. Each\n"
-    "mini is played back at the end and compared with the untrimmed state's output.\n"
+    "that's named after it with \"_usf\" added. The image may be in any byte order (.z64, .v64 or .n64),\n"
+    "and it may be in a ZIP archive. A game of the Aleck64 arcade board comes as its ROM set instead: a\n"
+    "ZIP archive or a folder of its chips. usfrip rips only games that it has a profile for, found by\n"
+    "the image's SHA-1. It boots the game, runs it to the profile's snapshot point and saves the state\n"
+    "there. Each track then runs from that state for its length analysis and for the coverage that trims\n"
+    "the set. Each mini is played back at the end and compared with the untrimmed state's output. An\n"
+    "image with more than one set, such as a game's music and its sound effects, gets a folder for each\n"
+    "set inside that folder.\n"
     "\n"
     "options:\n"
     "  -o, --output DIR     put the rips in DIR\n"
-    "  --list               list the profile's tracks, then stop\n"
+    "  --list               list the tracks of each set, then stop\n"
     "  --only REGEX         rip only the tracks whose name matches\n"
+    "  --bgm                rip only the music, without the sets of sound effects\n"
     "  --no-length          skip the length analysis and omit length and fade tags, except where\n"
     "                       the profile gives a track's length\n"
     "  --no-trim            keep the whole ROM and the whole state in the library\n"
@@ -177,52 +189,28 @@ void RunParallel(size_t count, unsigned threads, const Work& work)
     }
 }
 
-int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRegistries& names)
+// The jobs of a set: its tracks that --only picks.
+std::vector<Job> SetJobs(const GameProfile& profile, const Options& o)
 {
-    std::vector<uint8_t> rom;
-    if (!xsflib::ReadFile(xsflib::PathFromUtf8(input), rom))
-    {
-        std::fprintf(stderr, "error: can't read %s\n", input.c_str());
-        return 1;
-    }
-
-    const std::string sha1 = ImageSha1(rom);
-    const GameProfile* profile = usf::rip::FindProfile(sha1);
-    if (profile == nullptr)
-    {
-        std::fprintf(stderr, "error: %s: no profile for this image (SHA-1 %s)\n", input.c_str(), sha1.c_str());
-        return 1;
-    }
-
-    std::fprintf(stderr, "%s: %s (%s)\n", input.c_str(), profile->game.c_str(), profile->serial.c_str());
-
-    if (o.list)
-    {
-        for (size_t i = 0; i < profile->tracks.size(); i++)
-        {
-            const Track& track = profile->tracks[i];
-            std::printf("%4zu  0x%X  %s\n", i + 1, track.number, track.name.c_str());
-        }
-        return 0;
-    }
-
     std::vector<Job> jobs;
-    for (size_t i = 0; i < profile->tracks.size(); i++)
+    for (size_t i = 0; i < profile.tracks.size(); i++)
     {
-        if (std::regex_search(profile->tracks[i].name, o.only))
+        if (std::regex_search(profile.tracks[i].name, o.only))
         {
             Job job;
             job.index = i;
-            job.label = profile->tracks[i].name;
+            job.label = profile.tracks[i].name;
             jobs.push_back(std::move(job));
         }
     }
-    if (jobs.empty())
-    {
-        std::fprintf(stderr, "error: no track matches '%s'\n", o.only_text.c_str());
-        return 1;
-    }
 
+    return jobs;
+}
+
+// Rips one set of the image into `out_dir`.
+int RipSet(std::vector<uint8_t> rom, const GameProfile* profile, std::vector<Job> jobs, const fs::path& out_dir,
+           const Options& o, xsflib::cli::FileNameRegistries& names)
+{
     const usf::rip::Snapshot snapshot = usf::rip::TakeSnapshot(*profile, std::move(rom), o.pif_rom);
     std::fprintf(stderr, "snapshot at %.3f s, arrival %d\n", snapshot.seconds, snapshot.arrival);
 
@@ -257,6 +245,16 @@ int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRe
             std::fprintf(stderr, "warning: %s reads osTvType (RDRAM 0x300). A legacy player may play it as PAL.\n",
                          job.label.c_str());
         }
+
+        // A board's game may still use the board after the snapshot. The players have nothing there, so the track
+        // can sound different from the game.
+        if (job.run.board_accesses > 0)
+        {
+            std::fprintf(stderr,
+                         "warning: %s reads or writes the board's addresses after the snapshot (%llu times). Players "
+                         "have nothing there.\n",
+                         job.label.c_str(), static_cast<unsigned long long>(job.run.board_accesses));
+        }
     }
 
     // The set.
@@ -269,7 +267,6 @@ int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRe
     }
     const usf::rip::SetSections set = usf::rip::BuildSet(snapshot, tracks, o.trim ? &words : nullptr);
 
-    const fs::path out_dir = o.out_dir.empty() ? xsflib::rip::DefaultOutputDir(input, "_usf") : fs::path(o.out_dir);
     std::error_code error;
     fs::create_directories(out_dir, error);
     xsflib::rip::FileNames& out_names = xsflib::cli::NamesIn(names, out_dir, ".usflib", ".miniusf");
@@ -338,6 +335,118 @@ int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRe
     }
 
     xsflib::rip::ReportOutput(out_dir);
+
+    return result;
+}
+
+int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRegistries& names)
+{
+    // An arcade board's ROM set becomes one image, put together from its chips.
+    std::vector<uint8_t> rom;
+    const fs::path path = xsflib::PathFromUtf8(input);
+    if (usf::rip::IsRomSet(path))
+    {
+        std::vector<usf::rip::SetFile> files;
+        if (auto problem = usf::rip::ReadRomSet(path, usf::rip::Profiles(), files))
+        {
+            std::fprintf(stderr, "error: %s\n", problem->c_str());
+            return 1;
+        }
+
+        // A ZIP archive may hold a cartridge image instead, as images are often given. A set with some of a game's
+        // chips keeps its message about the missing ones, unless it holds an image too.
+        usf::rip::RomSetImage image = usf::rip::BuildRomSetImage(usf::rip::Profiles(), files);
+        std::error_code error;
+        usf::rip::SetFile* cartridge = nullptr;
+        if (image.profile == nullptr && !fs::is_directory(path, error))
+        {
+            cartridge = xsflib::rip::OnlyFileWithExtension(files, kImageExtensions);
+        }
+
+        if (image.profile != nullptr)
+        {
+            rom = std::move(image.rom);
+        }
+        else if (cartridge != nullptr)
+        {
+            rom = std::move(cartridge->data);
+        }
+        else
+        {
+            std::fprintf(stderr, "error: %s: %s\n", input.c_str(), image.problem.c_str());
+            return 1;
+        }
+    }
+    else if (!xsflib::ReadFile(path, rom))
+    {
+        std::fprintf(stderr, "error: can't read %s\n", input.c_str());
+        return 1;
+    }
+
+    const std::string sha1 = ImageSha1(rom);
+    const std::vector<const GameProfile*> profiles = usf::rip::FindProfiles(sha1);
+    if (profiles.empty())
+    {
+        std::fprintf(stderr, "error: %s: no profile for this image (SHA-1 %s)\n", input.c_str(), sha1.c_str());
+        return 1;
+    }
+
+    // An image with more than one set puts each set in a folder named after the set.
+    const bool several = profiles.size() > 1;
+    const fs::path base_dir = o.out_dir.empty() ? xsflib::rip::DefaultOutputDir(input, "_usf") : fs::path(o.out_dir);
+    int result = 0;
+    bool any_track = false;
+    bool any_set = false;
+    for (const GameProfile* profile : profiles)
+    {
+        if (o.bgm && profile->sound_effects)
+        {
+            continue;
+        }
+
+        any_set = true;
+        if (several)
+        {
+            std::fprintf(stderr, "%s: %s (%s), %s\n", input.c_str(), profile->game.c_str(), profile->serial.c_str(),
+                         profile->set.c_str());
+        }
+        else
+        {
+            std::fprintf(stderr, "%s: %s (%s)\n", input.c_str(), profile->game.c_str(), profile->serial.c_str());
+        }
+
+        if (o.list)
+        {
+            for (size_t i = 0; i < profile->tracks.size(); i++)
+            {
+                const Track& track = profile->tracks[i];
+                std::printf("%4zu  0x%X  %s\n", i + 1, track.number, track.name.c_str());
+            }
+            std::fflush(stdout);
+            continue;
+        }
+
+        std::vector<Job> jobs = SetJobs(*profile, o);
+        if (jobs.empty())
+        {
+            continue;
+        }
+
+        any_track = true;
+        const fs::path out_dir = several ? base_dir / xsflib::PathFromUtf8(profile->set) : base_dir;
+        result = std::max(result, RipSet(rom, profile, std::move(jobs), out_dir, o, names));
+    }
+
+    if (!any_set)
+    {
+        std::fprintf(stderr, "error: %s: the image has no set of music\n", input.c_str());
+        return 1;
+    }
+    if (!o.list && !any_track)
+    {
+        std::fprintf(stderr, "error: no track matches '%s'\n", o.only_text.c_str());
+        return 1;
+    }
 
     return result;
 }

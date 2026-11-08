@@ -16,7 +16,8 @@ namespace usf::rip
 // Every supported game's profile.
 const std::vector<GameProfile>& Profiles();
 
-// The profile of the image whose SHA-1 (of its big-endian bytes, in lower-case hex) is `sha1`, or null.
-const GameProfile* FindProfile(std::string_view sha1);
+// The profiles of every set of the image whose SHA-1 (of its big-endian bytes, in lower-case hex) is `sha1`, in the
+// order of Profiles(). Empty when there's none.
+std::vector<const GameProfile*> FindProfiles(std::string_view sha1);
 
 } // namespace usf::rip

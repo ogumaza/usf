@@ -214,9 +214,16 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
                       n64::Timing timing)
 {
     n64::Options options;
+    options.board = profile.board;
     options.rdram_size = profile.rdram_size;
     options.timing = timing;
     n64::System system(options);
+    system.SetBoardInputs(profile.board_inputs);
+    for (const n64::BoardInputEvent& event : profile.board_input)
+    {
+        system.AddBoardInput(event);
+    }
+
     system.LoadRom(std::move(rom));
     if (!profile.sha1.empty())
     {

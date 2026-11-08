@@ -50,6 +50,10 @@ struct TrackRun
     // The hashes of the run's output over its length and fade (see SampleHashes), and how many frames that is.
     std::vector<xsflib::Sha256::Digest> reference;
     uint64_t check_frames = 0;
+
+    // The CPU's reads and writes above physical 0x80000000 during the run. A console has nothing there, and neither
+    // has a legacy player. An arcade board has its RAM and inputs there.
+    uint64_t board_accesses = 0;
 };
 
 // Runs `track` from the snapshot. A track that needs no length analysis, no coverage and no reference doesn't run.

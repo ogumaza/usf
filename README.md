@@ -33,11 +33,28 @@ don't rip.
 - Pokémon Snap (USA)
 - Pokémon Stadium (USA, revision 2)
 - Pokémon Stadium 2 (USA)
-- Super Mario 64 (USA), for its sound effects, one at a time
+- Super Mario 64 (USA), for its music, and for its sound effects one at a time
 - Wave Race 64 (USA, revision 1)
+- Yoshi's Story (USA)
 
 For the rest of the list, `usfrip` rips the music. The two Zelda games boot with the CIC-NUS-6105 chip, and ripping them
 requires a dump of the console's PIF ROM (see "Ripping a game").
+
+`usfrip` also rips the music of these games of Seta's Aleck64, an arcade board built from the Nintendo 64's chips:
+
+- Eleven Beat
+- Hanabi de Doon! - Don-chan Puzzle
+- Hi Pai Paradise
+- Hi Pai Paradise 2
+- Kurukuru Fever
+- Magical Tetris Challenge
+- Mayjinsen 3
+- Star Soldier: Vanishing Earth
+- Super Real Mahjong VS
+- Tower & Shaft
+- Vivid Dolls
+
+An Aleck64 game comes as the ROM set of its board, not as a cartridge image.
 
 ## Ripping a game
 
@@ -47,7 +64,26 @@ usfrip game.z64
 
 `usfrip` writes the set to a folder next to the image, named after it with `_usf` added. The set is one `.usflib` with
 what the tracks share, and one `.miniusf` for each track. `-o DIR` writes it to DIR instead. The image may be in any
-byte order (`.z64`, `.v64` or `.n64`).
+byte order (`.z64`, `.v64` or `.n64`), and it may be in a ZIP archive, as the only file of the archive with one of
+those extensions.
+
+For an Aleck64 game, give its ROM set in place of the image: a ZIP archive of the set, or a folder of its chips.
+`usfrip` finds each chip of the game by its SHA-1 and size, whatever the file is called, and puts the image together
+from them. Other files in the set are ignored, and the board's PIF data isn't needed.
+
+```
+usfrip set.zip
+```
+
+The players have no Aleck64 board. Each Aleck64 profile stops the threads of the game that read the board's inputs or
+drive its video chip, and the music runs without them. `usfrip` warns if a track still reads or writes the board's
+addresses after the snapshot.
+
+Some images have more than one set, such as Super Mario 64's music and its sound effects. `usfrip` then writes each
+set to a separate folder inside that folder: `music` and `sound effects`. `--bgm` rips only the music.
+
+Super Real Mahjong VS plays its music in mono or in stereo. A setting in the game's service menu picks which, and the
+game plays mono until someone changes it. `usfrip` rips both, as the sets `mono` and `stereo`.
 
 A profile (`src/rip/profile.h`) says where in the game code to save the state, which register or word of RDRAM selects
 a track, which threads to stop, what to patch, and the list of tracks. Some games have no song-select call to stop at,
@@ -76,8 +112,9 @@ of the sound driver of the game.
 Options:
 
 - `-o DIR`, `--output DIR`: write the set to DIR
-- `--list`: list the tracks of the profile
+- `--list`: list the tracks of each set
 - `--only REGEX`: rip only the tracks whose names match
+- `--bgm`: rip only the music, without the sets of sound effects
 - `--no-length`: skip the length analysis
 - `--no-trim`: keep the whole ROM and the whole state in the library
 - `--no-check`: skip the check at the end
@@ -172,6 +209,9 @@ them: `plugins/foobar2000/README.md` and `plugins/xmplay/README.md`.
 - the RSP: the scalar unit, the vector unit with its accumulators, flags and divider, and its DMA engine
 - the interfaces of the RCP: MI, SP, DP, VI, AI, PI, SI, RI and the registers of the RDRAM chips. The RDP doesn't
   draw. The DP walks its command lists and raises its interrupt at each full sync. The VI is only a clock.
+- the Aleck64 board: 8 MiB of RDRAM, the CIC-NUS-5101, the DIP switches and controls, the coin, service, test and
+  start inputs, and a mahjong panel. The video chip of the E90 main board takes writes and reads 0. `n64run` runs an
+  image of the chips, not the set.
 - the PIF RAM and its joybus commands. By default no device answers, as in the legacy players. A ripper may connect a
   standard controller to each port, with scripted input, and an EEPROM of 4 or 16 Kbit to the cartridge.
 - boot: the state that the boot code of the PIF leaves for the IPL3 of the cartridge. The IPL3 then runs as on the
@@ -198,7 +238,9 @@ build/n64run --seconds 10 --wav out.wav game.z64
 to 8 MiB. `--debug-port` prints what a program writes to the debug port at 0x13FF0000. `--controller`
 connects a controller to the first port, and `--eeprom 4k` or `--eeprom 16k` an EEPROM to the cartridge.
 `--input F:B[:X:Y]` holds the buttons B, in hex as the controller sends them, from video field F on, with the stick at
-X and Y. `n64run` also plays a USF track with its libraries:
+X and Y. `--board aleck64` or `--board aleck64-e90` runs an image on the Aleck64 board, with 8 MiB of RDRAM.
+`--board-input F:S:Y[:R]` sets the board's inputs from video field F on: the words S at 0xC0800000 and Y at
+0xC0800004, and the four rows R of a mahjong panel. `n64run` also plays a USF track with its libraries:
 
 ```
 build/n64run --seconds 60 --wav out.wav "0001 Title.miniusf"

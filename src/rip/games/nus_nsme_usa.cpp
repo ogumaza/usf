@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 // Super Mario 64 (USA): the game's sound effects, played one at a time through the game's sound-effect interface.
+// nus_nsme_usa_music.cpp has the game's music, in a set of its own.
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
@@ -500,6 +501,8 @@ GameProfile NusNsmeUsa()
     profile.game = "Super Mario 64";
     profile.serial = "NUS-NSME-USA";
     profile.sha1 = "9bef1128717f958171a4afac3ed78ee2bb4e86ce";
+    profile.set = "sound effects";
+    profile.sound_effects = true;
     profile.year = "1996";
     profile.cic = n64::Cic::k6102;
     profile.sound_driver = "Super Mario 64 sound engine";

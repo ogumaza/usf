@@ -144,13 +144,14 @@ private:
             Passes& passes = passes_[track];
             passes.count = passes.target == target ? passes.count + 1 : 1;
             passes.target = target;
-            if (lead_ < 0)
+            if (!has_lead_)
             {
                 lead_ = track;
+                has_lead_ = true;
             }
         }
 
-        if (on_loop_ && (lead_ < 0 || track == lead_))
+        if (on_loop_ && (!has_lead_ || track == lead_))
         {
             on_loop_(track, target);
         }
@@ -161,7 +162,10 @@ private:
     std::function<void(int, uint32_t)> on_loop_;
     bool sounded_ = false;
     bool heard_ = false; // Whether an earlier frame sounded.
-    int lead_ = -1;      // The track whose loops MeasureLength counts.
+    // The track whose loops MeasureLength counts, once has_lead_ is set. A track register can hold any value, such as a
+    // channel's address in KSEG0. No track number can therefore mark a missing lead.
+    int lead_ = 0;
+    bool has_lead_ = false;
     std::map<int, Passes> passes_;
 };
 

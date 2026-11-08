@@ -47,6 +47,22 @@ inline constexpr uint32_t kPifRom = 0x1FC00000;
 inline constexpr uint32_t kPifRam = 0x1FC007C0;
 inline constexpr uint32_t kCartDomain1Address3 = 0x1FD00000;
 
+// Seta's Aleck64 arcade board adds memory and inputs above 0x80000000, where a console has nothing. Games reach them
+// through the TLB.
+inline constexpr uint32_t kBoardAddresses = 0x80000000;
+inline constexpr uint32_t kAleck64Ram = 0xC0000000;
+inline constexpr uint32_t kAleck64RamSize = 0x800000;
+inline constexpr uint32_t kAleck64Inputs = 0xC0800000;
+inline constexpr uint32_t kAleck64InputsSize = 0x1000;
+inline constexpr uint32_t kAleck64Switches = 0xC0800000;
+inline constexpr uint32_t kAleck64System = 0xC0800004;
+inline constexpr uint32_t kAleck64Panel = 0xC0800008;
+
+// The video chip of the Aleck64's E90 main board: a list of tiles, a palette and registers.
+inline constexpr uint32_t kAleck64Tiles = 0xD0000000;
+inline constexpr uint32_t kAleck64Palette = 0xD0010000;
+inline constexpr uint32_t kAleck64VideoMemorySize = 0x1000;
+
 // The debug port that emulators and development cartridges offer at the top of cartridge space. A program writes
 // text into the buffer and its length into the length register.
 inline constexpr uint32_t kIsViewer = 0x13FF0000;

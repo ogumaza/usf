@@ -38,8 +38,44 @@ enum class Timing
     kLegacy,
 };
 
+// The board that the console's chips sit on.
+enum class Board
+{
+    kConsole,
+
+    // Seta's Aleck64 arcade board, as the E92 main board: 8 MiB of RAM at physical 0xC0000000 and the board's inputs at
+    // 0xC0800000. Every other address from 0x80000000 up reads 0, and writes there are lost.
+    kAleck64,
+
+    // The Aleck64's E90 main board, which adds a video chip: its list of tiles at 0xD0000000 and its palette at
+    // 0xD0010000. Its registers read 0.
+    kAleck64E90,
+};
+
+// The inputs of the Aleck64's board. They're active low: a bit reads 0 while its switch is on or its button is held.
+struct BoardInputs
+{
+    uint32_t switches = 0xFFFFFFFF; // The word at 0xC0800000: the DIP switches in the upper half, and JAMMA controls.
+    uint32_t system = 0xFFFFFFFF;   // The word at 0xC0800004: coins, service, test and starts.
+
+    // A mahjong panel. The game writes a row select in bits 8 to 15 of the word at 0xC0800008, and reads the row's keys
+    // back in bits 16 to 23. `rows` holds the rows of the selects 0x01, 0x02, 0x04 and 0x08. Any other select, and the
+    // word on a board with no panel, reads 0.
+    bool panel = false;
+    std::array<uint8_t, 4> rows = {0xFF, 0xFF, 0xFF, 0xFF};
+};
+
+// A scripted change of the board's inputs, from a video field on.
+struct BoardInputEvent
+{
+    uint64_t field = 0;
+    BoardInputs inputs;
+};
+
 struct Options
 {
+    Board board = Board::kConsole;
+
     uint32_t rdram_size = kRdramSize4;
     Timing timing = Timing::kHardware;
 
@@ -96,6 +132,7 @@ enum class Cic
     k6103,
     k6105,
     k6106,
+    k5101, // The Aleck64's boot chip.
 };
 
 struct BootInfo
@@ -234,6 +271,16 @@ public:
 
     // Called with the text that the program writes to the debug port.
     void SetDebugOutput(std::function<void(std::string_view)> callback);
+
+    // The inputs of the Aleck64's board at reset, and a script of changes. Events take effect in the order they were
+    // added, at the first read of the inputs in or after their field. Reset starts the script again.
+    void SetBoardInputs(const BoardInputs& inputs);
+    void AddBoardInput(const BoardInputEvent& event);
+
+    // Loads and stores at physical addresses from 0x80000000 up since the last reset. A console has nothing there. On
+    // the Aleck64, the board answers them. With the legacy timing, the count also includes the accesses through TLB
+    // entries that map frames past the console's physical addresses (Cpu::RefusedBoardPages).
+    uint64_t BoardAccesses() const;
 
     // The video frame that VI_ORIGIN points at, for tests: its origin, its width and its pixel size in bytes.
     struct Frame
@@ -401,6 +448,19 @@ private:
         std::array<uint32_t, 8> registers{};
     };
 
+    // The Aleck64's board.
+    struct Aleck64
+    {
+        std::vector<uint8_t> ram;
+        std::vector<uint8_t> tiles;
+        std::vector<uint8_t> palette;
+        BoardInputs initial_inputs;
+        BoardInputs inputs;
+        std::vector<BoardInputEvent> script;
+        size_t next_input = 0;
+        uint32_t panel_select = 0;
+    };
+
     // One RDRAM chip's registers, which IPL3's initialization reads and writes.
     struct RdramChip
     {
@@ -468,6 +528,12 @@ private:
     void RunDpCommands();
     void WriteIsViewer(uint32_t offset, uint32_t value);
 
+    // The Aleck64's board (aleck64.cpp).
+    void ResetBoard();
+    uint32_t ReadBoard32(uint32_t paddr);
+    void WriteBoard(uint32_t paddr, uint64_t value, int size);
+    uint32_t ReadBoardInputs(uint32_t paddr);
+
     // Timing of the devices, in ticks.
     uint64_t VideoClock() const;
     uint64_t FieldTicks() const;
@@ -525,6 +591,8 @@ private:
     Si si_;
     Dp dp_;
     Ri ri_;
+    Aleck64 board_;
+    uint64_t board_accesses_ = 0;
     std::array<RdramChip, 4> rdram_chips_{};
     uint32_t direct_rdram_size_ = 0;
     uint32_t rdram_noise_ = 1;

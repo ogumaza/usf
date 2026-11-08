@@ -13,6 +13,18 @@ const std::vector<GameProfile>& Profiles()
     static const std::vector<GameProfile> kProfiles = []
     {
         return std::vector<GameProfile>{
+            games::Aleck64ElevenBeat(),
+            games::Aleck64HanabiDeDoon(),
+            games::Aleck64HiPaiParadise(),
+            games::Aleck64HiPaiParadise2(),
+            games::Aleck64KurukuruFever(),
+            games::Aleck64MagicalTetrisChallenge(),
+            games::Aleck64Mayjinsen3(),
+            games::Aleck64StarSoldier(),
+            games::Aleck64SuperRealMahjongVs(),
+            games::Aleck64SuperRealMahjongVsStereo(),
+            games::Aleck64TowerAndShaft(),
+            games::Aleck64VividDolls(),
             games::NusCzleUsaRev2(),
             games::NusN2veUsa(),
             games::NusNcteUsaRev1(),
@@ -26,8 +38,10 @@ const std::vector<GameProfile>& Profiles()
             games::NusNpgeUsa(),
             games::NusNpneUsa(),
             games::NusNpoeUsaRev2(),
+            games::NusNsmeUsaMusic(),
             games::NusNsmeUsa(),
             games::NusNwreUsaRev1(),
+            games::NusNyseUsa(),
             games::NusNzseUsa(),
         };
     }();
@@ -35,17 +49,18 @@ const std::vector<GameProfile>& Profiles()
     return kProfiles;
 }
 
-const GameProfile* FindProfile(std::string_view sha1)
+std::vector<const GameProfile*> FindProfiles(std::string_view sha1)
 {
+    std::vector<const GameProfile*> found;
     for (const GameProfile& profile : Profiles())
     {
         if (profile.sha1 == sha1)
         {
-            return &profile;
+            found.push_back(&profile);
         }
     }
 
-    return nullptr;
+    return found;
 }
 
 } // namespace usf::rip

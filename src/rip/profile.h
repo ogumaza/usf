@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "xsflib/rip/rom_set.h"
+
 #include "n64/constants.h"
 #include "n64/pif.h"
 #include "n64/system.h"
@@ -107,6 +109,10 @@ struct LoopWatch
     uint32_t match_value = 0;
 };
 
+// One chip of an arcade board's ROM set: its SHA-1 and size, where it goes in the image, and whether each pair of its
+// bytes is stored in reverse, as on the Aleck64.
+using RomChip = xsflib::rip::RomChip;
+
 struct GameProfile
 {
     // The game. `game` becomes the game tag and the set's name. `serial` names the image in messages, by its serial,
@@ -115,6 +121,12 @@ struct GameProfile
     std::string game;
     std::string serial;
     std::string sha1;
+
+    // An image may have more than one set, such as its music and its sound effects. Each set has a profile of its own,
+    // with the image's SHA-1. `set` names the set, such as "music". When an image has more than one set, each set goes
+    // in a folder of that name. `sound_effects` marks a set of sound effects, which usfrip's --bgm leaves out.
+    std::string set;
+    bool sound_effects = false;
 
     // Metadata for the tags. Empty fields are left out.
     std::string artist;
@@ -175,6 +187,16 @@ struct GameProfile
     // reaches the rip: the existing players report every port empty and emulate no save chip.
     std::vector<n64::InputEvent> input;
     n64::EepromType eeprom = n64::EepromType::kNone;
+
+    // A game of an arcade board comes as the board's ROM set: chips that the ripper finds by their SHA-1 and size, in
+    // a ZIP archive or a folder that the user gives, and puts together into the image. `sha1` is still the image's.
+    std::vector<RomChip> chips;
+
+    // The board, and its inputs from boot until the snapshot. Like the controllers, they don't reach the rip: the
+    // existing players emulate a console, with nothing at the board's addresses.
+    n64::Board board = n64::Board::kConsole;
+    n64::BoardInputs board_inputs;
+    std::vector<n64::BoardInputEvent> board_input;
 };
 
 } // namespace usf::rip

@@ -15,6 +15,7 @@
 #include "rip/rip.h"
 
 #include <cstdint>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@
 
 #include "n64/system.h"
 #include "rip/mips.h"
+#include "rip/profiles.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
 #include "usf/usf_file.h"
@@ -59,7 +61,9 @@ struct Program
 
 // With `loop_tracks`, the end of each pass also takes a jump back for each of that many tracks, one after another, as
 // a sequence player whose tracks loop separately does. At `track_jump`, t3 holds the track and t9 its loop's target.
-Program MakeProgram(int loop_tracks = 0)
+// With `track_addresses`, t7 also holds an address in KSEG0 for the track there, as a player that names a channel by
+// its address does.
+Program MakeProgram(int loop_tracks = 0, bool track_addresses = false)
 {
     using mips::kA0;
     using mips::kS0;
@@ -158,6 +162,11 @@ Program MakeProgram(int loop_tracks = 0)
         code.Emit(mips::Addiu(kT3, kZero, 0));
         const uint32_t next_track = code.Here();
         code.Emit(mips::Sll(kT9, kT3, 4));
+        if (track_addresses)
+        {
+            code.Emit(mips::Lui(kT7, 0x8000));
+            code.Emit(mips::Or(kT7, kT7, kT9));
+        }
         program.track_jump = code.Here();
         code.Emit(mips::Addiu(kT3, kT3, 1));
         code.Emit(mips::Addiu(kT8, kZero, static_cast<uint16_t>(loop_tracks)));
@@ -396,6 +405,29 @@ void TrackLoops()
     }
 }
 
+// The same, with each track named by its address in t7. An address in KSEG0 converts to a negative track number. The
+// analysis still counts the passes of the first track that loops.
+void TrackAddresses()
+{
+    const Program program = MakeProgram(3, true);
+    const usf::rip::Snapshot snapshot = MakeSnapshot(program);
+    usf::rip::GameProfile profile = MakeProfile();
+    profile.tracks[0].length_seconds.reset();
+    profile.loop_watches.push_back({kKseg0 | program.track_jump, mips::kT9, mips::kT7});
+    usf::rip::RunSettings settings;
+    settings.coverage = false;
+    settings.margin_seconds = 0.5;
+
+    const usf::rip::TrackRun run = usf::rip::RunTrack(profile, snapshot, profile.tracks[0], settings);
+
+    XSFLIB_CHECK(run.timing.has_value());
+    if (run.timing)
+    {
+        XSFLIB_CHECK(run.timing->length_ms >= 15 && run.timing->length_ms <= 24);
+        XSFLIB_CHECK(run.timing->fade_ms == 10000 && !run.timing->silent);
+    }
+}
+
 // libultra's OSThread: next at 0x00, priority at 0x04, queue at 0x08, state (16 bits) at 0x10. A queue ends at a
 // thread of priority -1.
 void StopThreads()
@@ -508,6 +540,36 @@ void TrackPatches()
     XSFLIB_CHECK(threw);
 }
 
+// An image with more than one set names each set, and no two of its sets alike.
+void ImageSets()
+{
+    std::set<std::string> images;
+    for (const usf::rip::GameProfile& profile : usf::rip::Profiles())
+    {
+        images.insert(profile.sha1);
+    }
+
+    for (const std::string& sha1 : images)
+    {
+        const std::vector<const usf::rip::GameProfile*> found = usf::rip::FindProfiles(sha1);
+        XSFLIB_CHECK(!found.empty());
+        if (found.size() > 1)
+        {
+            std::set<std::string> names;
+            for (const usf::rip::GameProfile* profile : found)
+            {
+                XSFLIB_CHECK(!profile->set.empty() && names.insert(profile->set).second);
+            }
+        }
+    }
+
+    // Super Mario 64 (USA): the music first, then the sound effects, which --bgm leaves out.
+    const std::vector<const usf::rip::GameProfile*> sm64 =
+        usf::rip::FindProfiles("9bef1128717f958171a4afac3ed78ee2bb4e86ce");
+    XSFLIB_CHECK(sm64.size() == 2 && !sm64[0]->sound_effects && sm64[1]->sound_effects);
+    XSFLIB_CHECK(usf::rip::FindProfiles("0000000000000000000000000000000000000000").empty());
+}
+
 } // namespace
 
 int main()
@@ -519,8 +581,10 @@ int main()
                                         NoRun();
                                         LoopWatch();
                                         TrackLoops();
+                                        TrackAddresses();
                                         StopThreads();
                                         RdramSelector();
                                         TrackPatches();
+                                        ImageSets();
                                     });
 }

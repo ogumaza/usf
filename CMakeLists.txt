@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(usf VERSION 1.0.1 LANGUAGES C CXX)
+project(usf VERSION 1.1.0 LANGUAGES C CXX)
 
 # xsflib is a library for players and rippers of the PSF family. It's a submodule. Its XsflibProject.cmake sets what a
 # project built on it starts with: C++20, a release build by default, the static C runtime, the options that keep the
@@ -22,6 +22,7 @@ xsflib_add_libraries(xsflib)
 
 # The emulator core: the VR4300, the RSP, the RCP's interfaces, the PIF, boot, save states and coverage.
 add_library(usf_n64 STATIC
+    src/n64/aleck64.cpp
     src/n64/boot.cpp
     src/n64/constants.h
     src/n64/coverage.cpp
@@ -73,6 +74,19 @@ target_compile_options(usf_format PRIVATE ${USF_WARNINGS})
 add_library(usf_rip STATIC
     src/rip/driver.cpp
     src/rip/driver.h
+    src/rip/games/aleck64.cpp
+    src/rip/games/aleck64.h
+    src/rip/games/aleck64_eleven_beat.cpp
+    src/rip/games/aleck64_hanabi_de_doon.cpp
+    src/rip/games/aleck64_hi_pai_paradise.cpp
+    src/rip/games/aleck64_hi_pai_paradise_2.cpp
+    src/rip/games/aleck64_kurukuru_fever.cpp
+    src/rip/games/aleck64_magical_tetris_challenge.cpp
+    src/rip/games/aleck64_mayjinsen_3.cpp
+    src/rip/games/aleck64_star_soldier.cpp
+    src/rip/games/aleck64_super_real_mahjong_vs.cpp
+    src/rip/games/aleck64_tower_and_shaft.cpp
+    src/rip/games/aleck64_vivid_dolls.cpp
     src/rip/games/games.h
     src/rip/games/nus_czle_usa_rev2.cpp
     src/rip/games/nus_n2ve_usa.cpp
@@ -88,7 +102,9 @@ add_library(usf_rip STATIC
     src/rip/games/nus_npne_usa.cpp
     src/rip/games/nus_npoe_usa_rev2.cpp
     src/rip/games/nus_nsme_usa.cpp
+    src/rip/games/nus_nsme_usa_music.cpp
     src/rip/games/nus_nwre_usa_rev1.cpp
+    src/rip/games/nus_nyse_usa.cpp
     src/rip/games/nus_nzse_usa.cpp
     src/rip/length.cpp
     src/rip/length.h
@@ -101,12 +117,14 @@ add_library(usf_rip STATIC
     src/rip/profiles.h
     src/rip/rip.cpp
     src/rip/rip.h
+    src/rip/rom_set.cpp
+    src/rip/rom_set.h
     src/rip/snapshot.cpp
     src/rip/snapshot.h
     src/rip/trim.cpp
     src/rip/trim.h
 )
-target_link_libraries(usf_rip PUBLIC usf_format xsflib::rip)
+target_link_libraries(usf_rip PUBLIC usf_format xsflib::rip xsflib::rom_set)
 target_compile_options(usf_rip PRIVATE ${USF_WARNINGS})
 
 # The player of the front ends: one rate for each track, on xsflib's playback framework.
@@ -170,6 +188,8 @@ if (USF_TESTS)
     xsflib_add_project_test(usf rip usf_rip)
     xsflib_add_project_test(usf player usf_rip)
     xsflib_add_project_test(usf pif usf_n64)
+    xsflib_add_project_test(usf aleck64 usf_n64)
+    xsflib_add_project_test(usf rom_set usf_rip)
 
     # A USF set made from small programs, with no game data. The tests of the front ends play it.
     add_library(usf_test_set STATIC tests/test_set.cpp tests/test_set.h)

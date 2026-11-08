@@ -132,6 +132,7 @@ void System::Reset()
     ri_ = {};
     rdram_noise_ = 0x2545F491;
     direct_rdram_size_ = 0;
+    ResetBoard();
     pif_.Reset();
     rsp_->Reset();
     cpu_->Reset();
@@ -757,6 +758,14 @@ uint32_t System::ReadBus32(uint32_t paddr)
     {
         return ReadRcp32(paddr);
     }
+    if (paddr >= kBoardAddresses)
+    {
+        board_accesses_++;
+        if (options_.board != Board::kConsole)
+        {
+            return ReadBoard32(paddr);
+        }
+    }
 
     return ReadCart32(paddr);
 }
@@ -803,6 +812,16 @@ void System::WriteBus(uint32_t paddr, uint64_t value, int size)
         }
         WriteMappedRdram(paddr, value, size);
         return;
+    }
+
+    if (paddr >= kBoardAddresses)
+    {
+        board_accesses_++;
+        if (options_.board != Board::kConsole)
+        {
+            WriteBoard(paddr, value, size);
+            return;
+        }
     }
 
     // The debug port is a buffer that takes stores of any size.

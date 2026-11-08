@@ -650,6 +650,33 @@ Cpu::TlbResult Cpu::LookupTlbPages(uint64_t vaddr, bool write, uint32_t& paddr) 
     return TlbResult::kMiss;
 }
 
+bool Cpu::MapsPastPhysical(uint64_t vaddr) const
+{
+    for (const TlbEntry& entry : tlb_)
+    {
+        const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
+        if ((vaddr & mask) != (entry.entry_hi & mask))
+        {
+            continue;
+        }
+
+        const uint32_t half_size = ((entry.page_mask | 0x1FFF) >> 1) + 1;
+        const uint32_t entry_lo = (static_cast<uint32_t>(vaddr) & half_size) != 0 ? entry.entry_lo1 : entry.entry_lo0;
+        const uint64_t frame = (uint64_t{entry_lo} >> 6) << 12;
+        if ((entry_lo & 2) != 0 && frame >= 0x20000000u)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint64_t Cpu::RefusedBoardPages() const
+{
+    return refused_board_pages_;
+}
+
 void Cpu::UnmapTlbPages(const TlbEntry& entry)
 {
     const uint32_t half_pages = (((entry.page_mask | 0x1FFF) >> 1) + 1) >> 12;
@@ -678,6 +705,9 @@ void Cpu::MapTlbPages(const TlbEntry& entry)
 {
     const uint32_t half_pages = (((entry.page_mask | 0x1FFF) >> 1) + 1) >> 12;
     const uint32_t first_page = static_cast<uint32_t>(entry.entry_hi) >> 12;
+
+    // An arcade board has RAM above the console's physical addresses. Its games map pages there.
+    const bool board = system_.GetOptions().board != Board::kConsole;
     for (int half = 0; half < 2; half++)
     {
         // A half with V set sets the read mapping of its pages, and their write mapping only if D is set. The legacy
@@ -686,7 +716,7 @@ void Cpu::MapTlbPages(const TlbEntry& entry)
         const uint32_t start = first_page + static_cast<uint32_t>(half) * half_pages;
         const uint32_t frame = static_cast<uint32_t>((uint64_t{entry_lo} >> 6) << 12);
         const bool direct = ((start << 12) & 0xC0000000u) == 0x80000000u;
-        if ((entry_lo & 2) == 0 || direct || frame >= 0x20000000u)
+        if ((entry_lo & 2) == 0 || direct || (frame >= 0x20000000u && !board))
         {
             continue;
         }
@@ -764,6 +794,10 @@ bool Cpu::Translate(uint64_t vaddr, Access access, uint32_t& paddr)
     }
 
     const TlbResult result = LookupTlb(vaddr, access == Access::kStore, paddr);
+    if (result != TlbResult::kHit && tlb_pages_ && MapsPastPhysical(vaddr))
+    {
+        refused_board_pages_++;
+    }
     if (result != TlbResult::kHit && tlb_pages_ && access == Access::kStore)
     {
         // The legacy players drop a store to a page with no writable mapping, and raise nothing.

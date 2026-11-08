@@ -42,13 +42,14 @@ struct Candidate
     uint32_t entry_offset; // IPL3 subtracts this from the header's entry point.
 };
 
-// The seeds of the boot chips, from the n64brew wiki. The 6101 shares the 6102's seed. The 7102 jumps to a fixed
-// address.
-constexpr std::array<Candidate, 4> kCandidates = {{
+// The seeds of the boot chips. The 6101 shares the 6102's seed. The 7102 jumps to a fixed address. The CIC-NUS-5101 is
+// the boot chip of Seta's Aleck64 arcade board.
+constexpr std::array<Candidate, 5> kCandidates = {{
     {Cic::k6102, 0x3F, 0},
     {Cic::k6103, 0x78, 0x100000},
     {Cic::k6105, 0x91, 0},
     {Cic::k6106, 0x85, 0x200000},
+    {Cic::k5101, 0xAC, 0x100000},
 }};
 
 constexpr uint64_t kFixedEntry7102 = 0xFFFFFFFF80000480ull;

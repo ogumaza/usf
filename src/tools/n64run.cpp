@@ -19,9 +19,16 @@
 //   --eeprom 4k|16k connect an EEPROM of 4 or 16 Kbit to the cartridge
 //   --input F:B[:X:Y] from video field F on, hold the buttons B (in hex, as the controller sends them) and put the
 //                   stick at X and Y. Implies --controller. Give it once for each change.
+//   --port P        the port that the next --controller or --input names, 1 to 4 (default 1)
+//   --board B       the board: console (the default), aleck64 or aleck64-e90. The Aleck64 implies --8mb.
+//   --board-input F:S:Y[:R]
+//                   from video field F on, the Aleck64's inputs: the words S at 0xC0800000 and Y at 0xC0800004, and
+//                   the four rows R of a mahjong panel (8 hex digits, the row of select 0x01 first). Field 0 sets
+//                   the inputs at reset.
 //
 // The WAV file has the rate of the first buffer. It reports when the rate changes.
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -52,6 +59,8 @@ const char* CicName(usf::n64::Cic cic)
         return "6105";
     case usf::n64::Cic::k6106:
         return "6106";
+    case usf::n64::Cic::k5101:
+        return "5101";
     default:
         return "unknown";
     }
@@ -61,7 +70,8 @@ int Usage()
 {
     std::fprintf(stderr,
                  "usage: n64run [--seconds S] [--wav FILE] [--legacy] [--pif FILE] [--8mb] [--debug-port]\n"
-                 "              [--controller] [--eeprom 4k|16k] [--input F:B[:X:Y]]... ROM\n"
+                 "              [--port P] [--controller] [--eeprom 4k|16k] [--input F:B[:X:Y]]...\n"
+                 "              [--board B] [--board-input F:S:Y[:R]]... ROM\n"
                  "       n64run [--seconds S] [--wav FILE] TRACK\n");
 
     return 2;
@@ -90,6 +100,32 @@ std::optional<usf::n64::InputEvent> ParseInput(const std::string& text)
     return event;
 }
 
+// Parses F:S:Y[:R] for --board-input.
+std::optional<usf::n64::BoardInputEvent> ParseBoardInput(const std::string& text)
+{
+    unsigned long long field = 0;
+    unsigned switches = 0;
+    unsigned system = 0;
+    unsigned rows = 0;
+    const int fields = std::sscanf(text.c_str(), "%llu:%x:%x:%x", &field, &switches, &system, &rows);
+    if (fields != 3 && fields != 4)
+    {
+        return std::nullopt;
+    }
+
+    usf::n64::BoardInputEvent event;
+    event.field = field;
+    event.inputs.switches = switches;
+    event.inputs.system = system;
+    event.inputs.panel = fields == 4;
+    for (size_t row = 0; row < event.inputs.rows.size(); row++)
+    {
+        event.inputs.rows[row] = static_cast<uint8_t>(rows >> (24 - 8 * row));
+    }
+
+    return event;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -99,7 +135,9 @@ int main(int argc, char** argv)
     std::string pif_path;
     std::string rom_path;
     usf::n64::Options options;
-    bool controller = false;
+    std::array<bool, usf::n64::Pif::kPorts> controllers{};
+    int port = 0;
+    std::vector<usf::n64::BoardInputEvent> board_inputs;
     usf::n64::EepromType eeprom = usf::n64::EepromType::kNone;
     std::vector<usf::n64::InputEvent> inputs;
     for (int i = 1; i < argc; i++)
@@ -136,7 +174,42 @@ int main(int argc, char** argv)
         }
         else if (arg == "--controller")
         {
-            controller = true;
+            controllers[port] = true;
+        }
+        else if (arg == "--port" && i + 1 < argc)
+        {
+            port = std::atoi(argv[++i]) - 1;
+            if (port < 0 || port >= usf::n64::Pif::kPorts)
+            {
+                return Usage();
+            }
+        }
+        else if (arg == "--board" && i + 1 < argc)
+        {
+            const std::string board = argv[++i];
+            if (board == "console")
+            {
+                options.board = usf::n64::Board::kConsole;
+            }
+            else if (board == "aleck64" || board == "aleck64-e90")
+            {
+                options.board = board == "aleck64" ? usf::n64::Board::kAleck64 : usf::n64::Board::kAleck64E90;
+                options.rdram_size = usf::n64::kRdramSize8;
+            }
+            else
+            {
+                return Usage();
+            }
+        }
+        else if (arg == "--board-input" && i + 1 < argc)
+        {
+            const std::optional<usf::n64::BoardInputEvent> event = ParseBoardInput(argv[++i]);
+            if (!event)
+            {
+                return Usage();
+            }
+
+            board_inputs.push_back(*event);
         }
         else if (arg == "--eeprom" && i + 1 < argc)
         {
@@ -157,7 +230,8 @@ int main(int argc, char** argv)
             }
 
             inputs.push_back(*event);
-            controller = true;
+            inputs.back().port = port;
+            controllers[port] = true;
         }
         else if (!arg.empty() && arg[0] != '-' && rom_path.empty())
         {
@@ -197,7 +271,22 @@ int main(int argc, char** argv)
 
     usf::n64::System system(options);
     system.LoadRom(std::move(rom));
-    system.GetPif().ConnectController(0, controller);
+    for (int p = 0; p < usf::n64::Pif::kPorts; p++)
+    {
+        system.GetPif().ConnectController(p, controllers[static_cast<size_t>(p)]);
+    }
+
+    for (const usf::n64::BoardInputEvent& event : board_inputs)
+    {
+        if (event.field == 0)
+        {
+            system.SetBoardInputs(event.inputs);
+        }
+        else
+        {
+            system.AddBoardInput(event);
+        }
+    }
     system.GetPif().SetEeprom(eeprom);
     for (const usf::n64::InputEvent& event : inputs)
     {
