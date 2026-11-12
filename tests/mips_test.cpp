@@ -8,18 +8,21 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
-#include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 
 #include "n64/system.h"
 #include "rip/driver.h"
+#include "test_programs.h"
 
 namespace
 {
 
 namespace mips = usf::rip::mips;
+
+using usf::n64::kKseg0;
 
 void Encodings()
 {
@@ -32,7 +35,6 @@ void Encodings()
     XSFLIB_CHECK(mips::Lw(mips::kS0, mips::kS1, 0x10) == 0x8E300010);        // 100011 10001 10000
     XSFLIB_CHECK(mips::Lbu(mips::kT8, mips::kT7, 0) == 0x91F80000);          // 100100 01111 11000
     XSFLIB_CHECK(mips::Sw(mips::kT1, mips::kT0, 4) == 0xAD090004);           // 101011 01000 01001
-    XSFLIB_CHECK(mips::Sh(mips::kT1, mips::kT0, 2) == 0xA5090002);           // 101001 01000 01001
     XSFLIB_CHECK(mips::Sll(mips::kA0, mips::kS0, 2) == 0x00102080);          // rt 10000, rd 00100, sa 00010, 000000
     XSFLIB_CHECK(mips::Srl(mips::kT1, mips::kT1, 31) == 0x00094FC2);         // rt 01001, rd 01001, sa 11111, 000010
     XSFLIB_CHECK(mips::Or(mips::kT3, mips::kT1, mips::kZero) == 0x01205825); // rs 01001, rd 01011, 100101
@@ -43,8 +45,8 @@ void Encodings()
     XSFLIB_CHECK(mips::High(0x80123456) == 0x8012 && mips::Low(0x80123456) == 0x3456);
     XSFLIB_CHECK(mips::High(0x8012F456) == 0x8013 && mips::Low(0x8012F456) == 0xF456);
 
-    // A jump's target field is the target's word address within its 256 MiB region. A branch's offset counts words
-    // from its delay slot.
+    // A jump's target field is the target's word address within its 256 MiB region. A branch's offset counts words from
+    // its delay slot.
     mips::Assembler code(0x80001000);
     code.J(0x80001000);
     code.Beq(mips::kT2, mips::kZero, 0x80001000);
@@ -67,15 +69,6 @@ constexpr uint32_t kDriver = 0x00010000;
 constexpr uint32_t kStore = 0x00020000;    // A function that stores a0 to a3 at kResults.
 constexpr uint32_t kCounters = 0x00020100; // Functions that each add 1 to a word at kResults + 0x10 and on.
 constexpr uint32_t kResults = 0x00030000;
-constexpr uint32_t kKseg0 = 0x80000000;
-
-void WriteWords(usf::n64::System& system, uint32_t address, const std::vector<uint32_t>& words)
-{
-    for (size_t i = 0; i < words.size(); i++)
-    {
-        system.WritePhysical32(address + 4 * static_cast<uint32_t>(i), words[i]);
-    }
-}
 
 // The function at kCounters + 0x20 * n adds 1 to the word at kResults + 0x10 + 4 * n.
 uint32_t Counter(uint32_t n)
@@ -91,28 +84,27 @@ uint32_t CounterValue(usf::n64::System& system, uint32_t n)
 // Runs the driver for `track` for half a second on the core with the legacy timing.
 std::unique_ptr<usf::n64::System> RunDriver(const usf::rip::Driver& driver, uint32_t track)
 {
-    usf::n64::Options core;
-    core.timing = usf::n64::Timing::kLegacy;
-    auto owner = std::make_unique<usf::n64::System>(core);
+    auto owner = std::make_unique<usf::n64::System>(usf::testing::LegacyOptions());
     usf::n64::System& system = *owner;
     system.LoadRom(std::vector<uint8_t>(0x1000, 0));
 
-    WriteWords(system, driver.address - kKseg0, driver.code);
+    usf::testing::WriteProgram(system, driver.address - kKseg0, driver.code);
     system.WritePhysical32(driver.track_word - kKseg0, track);
 
-    WriteWords(system, kStore,
-               {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)), mips::Sw(mips::kA0, mips::kT0, 0),
-                mips::Sw(mips::kA1, mips::kT0, 4), mips::Sw(mips::kA2, mips::kT0, 8),
-                mips::Sw(mips::kA3, mips::kT0, 12), mips::Jr(mips::kRa), mips::kNop});
+    usf::testing::WriteProgram(system, kStore,
+                               {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)), mips::Sw(mips::kA0, mips::kT0, 0),
+                                mips::Sw(mips::kA1, mips::kT0, 4), mips::Sw(mips::kA2, mips::kT0, 8),
+                                mips::Sw(mips::kA3, mips::kT0, 12), mips::Jr(mips::kRa), mips::kNop});
     for (uint32_t n = 0; n < 4; n++)
     {
         const auto offset = static_cast<uint16_t>(0x10 + 4 * n);
-        WriteWords(system, Counter(n) - kKseg0,
-                   {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)), mips::Lw(mips::kT1, mips::kT0, offset),
-                    mips::Addiu(mips::kT1, mips::kT1, 1), mips::Sw(mips::kT1, mips::kT0, offset), mips::Jr(mips::kRa),
-                    mips::kNop});
+        usf::testing::WriteProgram(system, Counter(n) - kKseg0,
+                                   {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)),
+                                    mips::Lw(mips::kT1, mips::kT0, offset), mips::Addiu(mips::kT1, mips::kT1, 1),
+                                    mips::Sw(mips::kT1, mips::kT0, offset), mips::Jr(mips::kRa), mips::kNop});
     }
-    WriteWords(system, kCounters + 0x80, {mips::Lui(mips::kV0, 0x1234), mips::Jr(mips::kRa), mips::kNop});
+    usf::testing::WriteProgram(system, kCounters + 0x80,
+                               {mips::Lui(mips::kV0, 0x1234), mips::Jr(mips::kRa), mips::kNop});
 
     usf::n64::Cpu& cpu = system.GetCpu();
     cpu.SetCop0(usf::n64::kCop0Status, 0);
@@ -124,8 +116,8 @@ std::unique_ptr<usf::n64::System> RunDriver(const usf::rip::Driver& driver, uint
     return owner;
 }
 
-// The driver calls the start functions once with the track's number and the frame functions once a frame, each only
-// for the tracks and frames that its conditions give.
+// The driver calls the start functions once with the track's number and the frame functions once a frame, each only for
+// the tracks and frames that its conditions give.
 void DriverRun()
 {
     usf::rip::CallDriverOptions options;
@@ -206,40 +198,38 @@ void DriverArguments()
     XSFLIB_CHECK(system.ReadPhysical32(kResults + 12) == 0x21);
 }
 
-void DriverErrors()
+// The driver's address must be in KSEG0.
+void DriverOutsideKseg0()
 {
     usf::rip::CallDriverOptions options;
     options.address = 0x00010000;
-
-    bool threw = false;
-    try
+    const auto build = [&options]
     {
         usf::rip::BuildCallDriver(options);
-    }
-    catch (const std::invalid_argument&)
-    {
-        threw = true;
-    }
+    };
 
-    XSFLIB_CHECK(threw);
+    const std::string error = xsflib::testing::ErrorOf<std::invalid_argument>(build);
 
+    XSFLIB_CHECK(error.find("must be a word-aligned address in KSEG0") != std::string::npos);
+}
+
+// A call takes at most four arguments: a0 to a3.
+void TooManyArguments()
+{
+    usf::rip::CallDriverOptions options;
     options.address = 0x80010000;
     usf::rip::GameCall call;
     call.function = 0x80020000;
     call.arguments.resize(5);
     options.start_calls = {call};
-
-    threw = false;
-    try
+    const auto build = [&options]
     {
         usf::rip::BuildCallDriver(options);
-    }
-    catch (const std::invalid_argument&)
-    {
-        threw = true;
-    }
+    };
 
-    XSFLIB_CHECK(threw);
+    const std::string error = xsflib::testing::ErrorOf<std::invalid_argument>(build);
+
+    XSFLIB_CHECK(error.find("at most four arguments") != std::string::npos);
 }
 
 } // namespace
@@ -252,6 +242,7 @@ int main()
                                         Encodings();
                                         DriverRun();
                                         DriverArguments();
-                                        DriverErrors();
+                                        DriverOutsideKseg0();
+                                        TooManyArguments();
                                     });
 }

@@ -109,6 +109,10 @@ struct LoopWatch
     uint32_t match_value = 0;
 };
 
+// The repeat count of a loop that repeats for ever, in the count register's low byte (LoopWatch::count_register).
+inline constexpr uint64_t kLoopCountMask = 0xFF;
+inline constexpr uint64_t kForeverCount = 0xFF;
+
 // One chip of an arcade board's ROM set: its SHA-1 and size, where it goes in the image, and whether each pair of its
 // bytes is stored in reverse, as on the Aleck64.
 using RomChip = xsflib::rip::RomChip;
@@ -116,8 +120,8 @@ using RomChip = xsflib::rip::RomChip;
 struct GameProfile
 {
     // The game. `game` becomes the game tag and the set's name. `serial` names the image in messages, by its serial,
-    // region and revision, such as "NUS-NCTE-USA-rev1". `sha1` is the SHA-1 of the image in big-endian byte order,
-    // in lower-case hex. The ripper refuses an image with another hash.
+    // region and revision, such as "NUS-NCTE-USA-rev1". `sha1` is the SHA-1 of the image in big-endian byte order, in
+    // lower-case hex. The ripper refuses an image with another hash.
     std::string game;
     std::string serial;
     std::string sha1;
@@ -135,6 +139,7 @@ struct GameProfile
 
     // The boot chip, or kUnknown to let the boot find it. A CIC-NUS-6105 game needs a dump of the PIF ROM.
     n64::Cic cic = n64::Cic::kUnknown;
+
     uint32_t rdram_size = n64::kRdramSize4;
 
     // Changes to the ROM, made before boot.
@@ -146,8 +151,8 @@ struct GameProfile
 
     // The snapshot point: the instruction at `snapshot_address`, the `snapshot_hit`th time the CPU reaches it, within
     // `boot_seconds` of emulated time from boot. Often the call of the song-select function, with the song's number in
-    // an argument register. If that moment isn't quiet, the ripper waits for the next arrival, up to `quiet_tries`
-    // more times.
+    // an argument register. If that moment isn't quiet, the ripper waits for the next arrival, up to `quiet_tries` more
+    // times.
     uint32_t snapshot_address = 0;
     int snapshot_hit = 1;
     int quiet_tries = 0;
@@ -159,9 +164,9 @@ struct GameProfile
     // Words written into RDRAM at the snapshot, before the state is saved.
     std::vector<RdramPatch> rdram_patches;
 
-    // Threads that the ripper stops at the snapshot: the addresses of their OSThread structures. A thread stopped
-    // this way is taken off the queue it waits in and marked stopped, as osStopThread does. The thread that is
-    // running at the snapshot can't be stopped this way. A driver can take it over instead.
+    // Threads that the ripper stops at the snapshot: the addresses of their OSThread structures. A thread stopped this
+    // way is taken off the queue it waits in and marked stopped, as osStopThread does. The thread that is running at
+    // the snapshot can't be stopped this way. A driver can take it over instead.
     std::vector<uint32_t> stop_threads;
 
     // A driver to install at the snapshot, if the game needs one.
@@ -174,8 +179,8 @@ struct GameProfile
     bool enable_compare = true;
     bool enable_fifo_full = true;
 
-    // The length analysis's loop points. Without any, a track ends when it has been silent for the analysis's
-    // silence, or at its limit.
+    // The length analysis's loop points. Without any, a track ends when it has been silent for the analysis's silence,
+    // or at its limit.
     std::vector<LoopWatch> loop_watches;
 
     // The name of the game's sound driver for the informational tag usfdriver, such as "libultra compressed sequence
@@ -183,13 +188,13 @@ struct GameProfile
     std::string sound_driver;
 
     // Input from boot until the snapshot: the script of controller states (pif.h), and the save chip. The ripper
-    // connects a controller to each port that an event names, and to port 0 when `controller` is set. Neither
-    // reaches the rip: the existing players report every port empty and emulate no save chip.
+    // connects a controller to each port that an event names, and to port 0 when `controller` is set. Neither reaches
+    // the rip: the existing players report every port empty and emulate no save chip.
     std::vector<n64::InputEvent> input;
     n64::EepromType eeprom = n64::EepromType::kNone;
 
-    // A game of an arcade board comes as the board's ROM set: chips that the ripper finds by their SHA-1 and size, in
-    // a ZIP archive or a folder that the user gives, and puts together into the image. `sha1` is still the image's.
+    // A game of an arcade board comes as the board's ROM set: chips that the ripper finds by their SHA-1 and size, in a
+    // ZIP archive or a folder that the user gives, and puts together into the image. `sha1` is still the image's.
     std::vector<RomChip> chips;
 
     // The board, and its inputs from boot until the snapshot. Like the controllers, they don't reach the rip: the

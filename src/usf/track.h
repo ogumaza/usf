@@ -24,8 +24,8 @@ n64::Options TrackOptions(const LoadedUsf& track);
 void StartTrack(n64::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state);
 
 // Keeps a track's output in time with the emulated time. The output is the concatenation of the game's buffers. A game
-// that stops sending them for longer than kStallSeconds gets silence for the time that it stopped, so that time goes
-// on in the output too. A player runs the core in slices of SliceTicks, and asks for the silence after each one.
+// that stops sending them for longer than kStallSeconds gets silence for the time that it stopped, so that time goes on
+// in the output too. A player runs the core in slices of SliceTicks, and asks for the silence after each one.
 class OutputClock
 {
 public:

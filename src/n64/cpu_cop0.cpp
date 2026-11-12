@@ -2,32 +2,63 @@
 
 // The VR4300's COP0: its registers, the TLB, exceptions and interrupts, and address translation.
 
+#include "n64/cpu_cop0.h"
+
+#include <utility>
+
+#include "n64/bits.h"
+#include "n64/constants.h"
 #include "n64/cpu.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
 
-constexpr uint32_t kIndexMask = 0x8000003F;
-constexpr uint32_t kEntryLoMask = 0x3FFFFFFF;
-constexpr uint32_t kPageMaskMask = 0x01FFE000;
-constexpr uint64_t kEntryHiMask = 0xC00000FFFFFFE0FFull;
-constexpr uint64_t kVpn2Mask = 0x000000FFFFFFE000ull;
-constexpr uint32_t kStatusWriteMask = 0xFF57FFFF;
-constexpr uint32_t kConfigWriteMask = 0x0F00800F;
-constexpr uint32_t kCauseExceptionMask = 0x7C;
-constexpr uint32_t kCauseCoprocessorMask = 0x30000000;
-constexpr uint32_t kCauseSoftwareMask = 0x300;
-constexpr uint32_t kPrId = 0x00000B22;
-constexpr uint64_t kVectorBase = 0xFFFFFFFF80000000ull;
-constexpr uint64_t kVectorBaseBoot = 0xFFFFFFFFBFC00200ull;
-
-uint64_t SignExtend32(uint64_t value)
+// Whether `entry` covers the VPN2 of `vaddr`, under its page mask.
+bool MatchesVpn2(const TlbEntry& entry, uint64_t vaddr)
 {
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(static_cast<uint32_t>(value))));
+    const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
+    return (vaddr & mask) == (entry.entry_hi & mask);
+}
+
+// Whether `entry` maps `vaddr` for `asid`. The VPN2 and the region bits must match, and so must the ASID unless the
+// entry is global.
+bool Matches(const TlbEntry& entry, uint64_t vaddr, uint32_t asid)
+{
+    return MatchesVpn2(entry, vaddr) && (vaddr >> kRegionShift) == (entry.entry_hi >> kRegionShift) &&
+           (entry.global || (entry.entry_hi & kEntryHiAsidMask) == asid);
+}
+
+// The size of each half of an entry: one page of the page mask's size.
+uint32_t HalfSize(const TlbEntry& entry)
+{
+    return ((entry.page_mask | kMinPairMask) >> 1) + 1;
+}
+
+// The physical address of the page that an EntryLo maps.
+uint64_t FrameOf(uint32_t entry_lo)
+{
+    return (uint64_t{entry_lo} >> kEntryLoPfnShift) << kPageBits;
+}
+
+// Context's BadVPN2 for `vaddr`: bits 13 to 31 of the address, at bit 4.
+uint64_t ContextBadVpn2(uint64_t vaddr)
+{
+    return ((vaddr >> 13) & 0x7FFFF) << 4;
+}
+
+// XContext's R and BadVPN2 for `vaddr`: the address's top two bits, and its bits 13 to 39 at bit 4.
+uint64_t XContextBadVpn2(uint64_t vaddr)
+{
+    return (((vaddr >> kRegionShift) & 3) << kXContextRegionShift) | (((vaddr >> 13) & 0x7FFFFFF) << 4);
+}
+
+// EntryHi's R and VPN2 for `vaddr`.
+uint64_t EntryHiVpn2(uint64_t vaddr)
+{
+    return (vaddr & kVpn2Mask) | (vaddr & kEntryHiRegionMask);
 }
 
 } // namespace
@@ -54,20 +85,20 @@ void Cpu::SetCop0(int index, uint64_t value)
         break;
 
     case kCop0Context:
-        context_ = value & 0xFFFFFFFFFFFFFFF0ull;
+        context_ = value & (kContextPteBaseMask | kContextBadVpn2Mask);
         break;
 
     case kCop0XContext:
-        x_context_ = value & 0xFFFFFFFFFFFFFFF0ull;
+        x_context_ = value & (kXContextPteBaseMask | kXContextBadVpn2Mask);
         break;
 
     case kCop0Cause:
-        cause_ = static_cast<uint32_t>(value) & 0xB000FF7C;
+        cause_ = static_cast<uint32_t>(value) & kCauseDefinedMask;
         UpdateInterruptPending();
         break;
 
     case kCop0Wired:
-        wired_ = static_cast<uint32_t>(value) & 0x3F;
+        wired_ = static_cast<uint32_t>(value) & kWiredMask;
         break;
 
     default:
@@ -172,7 +203,7 @@ void Cpu::WriteCop0(int index, uint64_t value)
         break;
 
     case kCop0Context:
-        context_ = (context_ & 0x7FFFF0) | (value & 0xFFFFFFFFFF800000ull);
+        context_ = (context_ & kContextBadVpn2Mask) | (value & kContextPteBaseMask);
         break;
 
     case kCop0PageMask:
@@ -180,7 +211,7 @@ void Cpu::WriteCop0(int index, uint64_t value)
         break;
 
     case kCop0Wired:
-        wired_ = low & 0x3F;
+        wired_ = low & kWiredMask;
         random_epoch_ = instructions_;
         break;
 
@@ -219,19 +250,19 @@ void Cpu::WriteCop0(int index, uint64_t value)
         break;
 
     case kCop0WatchLo:
-        watch_lo_ = low & 0xFFFFFFFB;
+        watch_lo_ = low & kWatchLoMask;
         break;
 
     case kCop0WatchHi:
-        watch_hi_ = low & 0xF;
+        watch_hi_ = low & kWatchHiMask;
         break;
 
     case kCop0XContext:
-        x_context_ = (x_context_ & 0x1FFFFFFF0ull) | (value & 0xFFFFFFFE00000000ull);
+        x_context_ = (x_context_ & kXContextBadVpn2Mask) | (value & kXContextPteBaseMask);
         break;
 
     case kCop0ParityError:
-        parity_error_ = low & 0xFF;
+        parity_error_ = low & kParityErrorMask;
         break;
 
     case kCop0TagLo:
@@ -302,7 +333,7 @@ void Cpu::ScheduleCompare()
 {
     // The tick at which Count next becomes equal to Compare. When they're equal now, that's a full turn of Count away.
     const uint64_t full = now_ + count_offset_;
-    uint64_t counts = (compare_ - static_cast<uint32_t>(full >> 1)) & 0xFFFFFFFF;
+    uint64_t counts = compare_ - static_cast<uint32_t>(full >> 1);
     if (counts == 0)
     {
         counts = uint64_t{1} << 32;
@@ -333,20 +364,16 @@ void Cpu::NoteCountUpdated()
     count_updated_ = now_;
 }
 
-void Cpu::SetInterruptLine(uint32_t cause_bit, bool raised)
+void Cpu::SetIp2(bool raised)
 {
-    if (cause_bit == kCauseIp2)
-    {
-        ip2_stale_ = false;
-    }
-
+    ip2_stale_ = false;
     if (raised)
     {
-        cause_ |= cause_bit;
+        cause_ |= kCauseIp2;
     }
     else
     {
-        cause_ &= ~cause_bit;
+        cause_ &= ~kCauseIp2;
     }
 
     UpdateInterruptPending();
@@ -355,8 +382,8 @@ void Cpu::SetInterruptLine(uint32_t cause_bit, bool raised)
 void Cpu::UpdateInterruptPending()
 {
     const uint32_t lines = ip2_stale_ ? cause_ & ~kCauseIp2 : cause_;
-    interrupt_pending_ =
-        (lines & status_ & 0xFF00) != 0 && (status_ & kStatusIe) != 0 && (status_ & (kStatusExl | kStatusErl)) == 0;
+    interrupt_pending_ = (lines & status_ & kInterruptMask) != 0 && (status_ & kStatusIe) != 0 &&
+                         (status_ & (kStatusExl | kStatusErl)) == 0;
     if (interrupt_pending_)
     {
         system_.BreakSlice();
@@ -380,14 +407,13 @@ void Cpu::SetExceptionHook(std::function<void(ExceptionCode, uint64_t)> hook)
     exception_hook_ = std::move(hook);
 }
 
-void Cpu::RaiseException(ExceptionCode code, uint32_t coprocessor)
+void Cpu::RaiseException(ExceptionCode code, uint32_t coprocessor, uint64_t vector)
 {
     if (exception_hook_)
     {
         exception_hook_(code, current_pc_);
     }
 
-    uint64_t vector = 0x180;
     if ((status_ & kStatusExl) == 0)
     {
         epc_ = in_delay_slot_ ? current_pc_ - 4 : current_pc_;
@@ -403,10 +429,15 @@ void Cpu::RaiseException(ExceptionCode code, uint32_t coprocessor)
         status_ |= kStatusExl;
     }
 
-    cause_ = (cause_ & ~(kCauseExceptionMask | kCauseCoprocessorMask)) | (static_cast<uint32_t>(code) << 2) |
-             (coprocessor << 28);
+    cause_ = (cause_ & ~(kCauseExceptionMask | kCauseCoprocessorMask)) |
+             (static_cast<uint32_t>(code) << kCauseExceptionShift) | (coprocessor << kCauseCoprocessorShift);
     const uint64_t base = (status_ & kStatusBev) != 0 ? kVectorBaseBoot : kVectorBase;
-    pc_ = base + vector;
+    EnterVector(base + vector);
+}
+
+void Cpu::EnterVector(uint64_t address)
+{
+    pc_ = address;
     next_pc_ = pc_ + 4;
     branch_pending_ = false;
     translation_epoch_++;
@@ -416,10 +447,9 @@ void Cpu::RaiseException(ExceptionCode code, uint32_t coprocessor)
 void Cpu::SetAddressFields(uint64_t vaddr)
 {
     bad_vaddr_ = vaddr;
-    context_ = (context_ & 0xFFFFFFFFFF800000ull) | (((vaddr >> 13) & 0x7FFFF) << 4);
-    x_context_ =
-        (x_context_ & 0xFFFFFFFE00000000ull) | (((vaddr >> 62) & 3) << 31) | (((vaddr >> 13) & 0x7FFFFFF) << 4);
-    entry_hi_ = (entry_hi_ & 0xFF) | (vaddr & kVpn2Mask) | (vaddr & 0xC000000000000000ull);
+    context_ = (context_ & kContextPteBaseMask) | ContextBadVpn2(vaddr);
+    x_context_ = (x_context_ & kXContextPteBaseMask) | XContextBadVpn2(vaddr);
+    entry_hi_ = (entry_hi_ & kEntryHiAsidMask) | EntryHiVpn2(vaddr);
     translation_epoch_++;
 }
 
@@ -439,15 +469,15 @@ void Cpu::RaisePageFault(uint64_t vaddr, Access access, bool covered)
     }
 
     bad_vaddr_ = vaddr;
-    context_ = (context_ & 0xFFFFFFFFFF800000ull) | (((vaddr >> 13) & 0x7FFFF) << 4);
-    entry_hi_ = (vaddr & kVpn2Mask) | (vaddr & 0xC000000000000000ull);
+    context_ = (context_ & kContextPteBaseMask) | ContextBadVpn2(vaddr);
+    entry_hi_ = EntryHiVpn2(vaddr);
 
-    uint64_t vector = 0x180;
+    uint64_t vector = kGeneralVector;
     if ((status_ & kStatusExl) == 0)
     {
         epc_ = in_delay_slot_ ? current_pc_ - 4 : current_pc_;
         status_ |= kStatusExl;
-        vector = covered ? 0x180 : 0;
+        vector = covered ? kGeneralVector : kTlbRefillVector;
     }
     else if (access == Access::kLoad)
     {
@@ -455,27 +485,22 @@ void Cpu::RaisePageFault(uint64_t vaddr, Access access, bool covered)
         epc_ -= in_delay_slot_ ? 8 : 4;
     }
 
-    cause_ = static_cast<uint32_t>(ExceptionCode::kTlbLoad) << 2;
+    cause_ = static_cast<uint32_t>(ExceptionCode::kTlbLoad) << kCauseExceptionShift;
     if (in_delay_slot_)
     {
         cause_ |= kCauseBd;
     }
 
-    pc_ = kVectorBase + vector;
-    next_pc_ = pc_ + 4;
-    branch_pending_ = false;
-    translation_epoch_++;
-    UpdateInterruptPending();
+    EnterVector(kVectorBase + vector);
 }
 
 void Cpu::RaiseTlbException(uint64_t vaddr, Access access, bool refill, bool modification)
 {
     // A refill outside an exception uses the TLB refill vector, or the XTLB vector in a 64-bit mode.
-    bool extended = false;
-    const bool exception_level = (status_ & kStatusExl) != 0;
-    if (refill && !exception_level)
+    uint64_t vector = kGeneralVector;
+    if (refill && (status_ & kStatusExl) == 0)
     {
-        extended = Decode(vaddr).extended;
+        vector = Decode(vaddr).extended ? kXtlbRefillVector : kTlbRefillVector;
     }
 
     SetAddressFields(vaddr);
@@ -489,20 +514,13 @@ void Cpu::RaiseTlbException(uint64_t vaddr, Access access, bool refill, bool mod
         code = ExceptionCode::kTlbStore;
     }
 
-    RaiseException(code);
-
-    if (refill && !exception_level)
-    {
-        pc_ = pc_ - 0x180 + (extended ? 0x080 : 0x000);
-        next_pc_ = pc_ + 4;
-    }
+    RaiseException(code, 0, vector);
 }
 
 Cpu::Segment Cpu::Decode(uint64_t vaddr) const
 {
-    const uint32_t ksu = (status_ >> 3) & 3;
-    const bool kernel = (status_ & (kStatusExl | kStatusErl)) != 0 || ksu == 0;
-    const bool supervisor = !kernel && ksu == 1;
+    const bool kernel = KernelMode();
+    const bool supervisor = !kernel && Ksu() == kKsuSupervisor;
     bool extended = false;
     if (kernel)
     {
@@ -520,26 +538,26 @@ Cpu::Segment Cpu::Decode(uint64_t vaddr) const
     if (!extended)
     {
         // In a 32-bit mode, an address must be a sign-extended 32-bit value.
-        if (static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(vaddr))) != vaddr)
+        if (SignExtend32(vaddr) != vaddr)
         {
             return {Segment::kError, 0, false};
         }
 
         const uint32_t address = static_cast<uint32_t>(vaddr);
-        if (address < 0x80000000u)
+        if (address < kKseg0)
         {
             return {Segment::kTlb, 0, false};
         }
         if (kernel)
         {
-            if (address < 0xC0000000u)
+            if (address < kKseg2)
             {
-                return {Segment::kDirect, address & 0x1FFFFFFF, false};
+                return {Segment::kDirect, address & kPhysicalAddressMask, false};
             }
 
             return {Segment::kTlb, 0, false};
         }
-        if (supervisor && address >= 0xC0000000u && address < 0xE0000000u)
+        if (supervisor && address >= kKseg2 && address < kKseg3)
         {
             return {Segment::kTlb, 0, false};
         }
@@ -586,7 +604,7 @@ Cpu::Segment Cpu::Decode(uint64_t vaddr) const
     }
     if (vaddr >= 0xFFFFFFFF80000000ull && vaddr <= 0xFFFFFFFFBFFFFFFFull)
     {
-        return {Segment::kDirect, static_cast<uint32_t>(vaddr) & 0x1FFFFFFF, true};
+        return {Segment::kDirect, static_cast<uint32_t>(vaddr) & kPhysicalAddressMask, true};
     }
     if (vaddr >= 0xFFFFFFFFE0000000ull)
     {
@@ -628,11 +646,11 @@ void Cpu::PageTable::Clear()
 
 Cpu::TlbResult Cpu::LookupTlbPages(uint64_t vaddr, bool write, uint32_t& paddr) const
 {
-    const uint32_t page = static_cast<uint32_t>(vaddr) >> 12;
+    const uint32_t page = static_cast<uint32_t>(vaddr) >> kPageBits;
     const uint32_t value = write ? write_pages_.Get(page) : read_pages_.Get(page);
     if (value != 0)
     {
-        paddr = (value & ~0xFFFu) | (static_cast<uint32_t>(vaddr) & 0xFFF);
+        paddr = (value & ~kPageOffsetMask) | (static_cast<uint32_t>(vaddr) & kPageOffsetMask);
         return TlbResult::kHit;
     }
 
@@ -640,8 +658,7 @@ Cpu::TlbResult Cpu::LookupTlbPages(uint64_t vaddr, bool write, uint32_t& paddr) 
     // zeros therefore covers 0 to 0x1FFF.
     for (const TlbEntry& entry : tlb_)
     {
-        const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
-        if ((vaddr & mask) == (entry.entry_hi & mask))
+        if (MatchesVpn2(entry, vaddr))
         {
             return TlbResult::kInvalid;
         }
@@ -654,16 +671,15 @@ bool Cpu::MapsPastPhysical(uint64_t vaddr) const
 {
     for (const TlbEntry& entry : tlb_)
     {
-        const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
-        if ((vaddr & mask) != (entry.entry_hi & mask))
+        if (!MatchesVpn2(entry, vaddr))
         {
             continue;
         }
 
-        const uint32_t half_size = ((entry.page_mask | 0x1FFF) >> 1) + 1;
+        const uint32_t half_size = HalfSize(entry);
         const uint32_t entry_lo = (static_cast<uint32_t>(vaddr) & half_size) != 0 ? entry.entry_lo1 : entry.entry_lo0;
-        const uint64_t frame = (uint64_t{entry_lo} >> 6) << 12;
-        if ((entry_lo & 2) != 0 && frame >= 0x20000000u)
+        const uint64_t frame = FrameOf(entry_lo);
+        if ((entry_lo & kEntryLoValid) != 0 && frame >= kPhysicalAddressLimit)
         {
             return true;
         }
@@ -679,12 +695,12 @@ uint64_t Cpu::RefusedBoardPages() const
 
 void Cpu::UnmapTlbPages(const TlbEntry& entry)
 {
-    const uint32_t half_pages = (((entry.page_mask | 0x1FFF) >> 1) + 1) >> 12;
-    const uint32_t first_page = static_cast<uint32_t>(entry.entry_hi) >> 12;
+    const uint32_t half_pages = HalfSize(entry) >> kPageBits;
+    const uint32_t first_page = static_cast<uint32_t>(entry.entry_hi) >> kPageBits;
     for (int half = 0; half < 2; half++)
     {
         const uint32_t entry_lo = half == 0 ? entry.entry_lo0 : entry.entry_lo1;
-        if ((entry_lo & 2) == 0)
+        if ((entry_lo & kEntryLoValid) == 0)
         {
             continue;
         }
@@ -693,7 +709,7 @@ void Cpu::UnmapTlbPages(const TlbEntry& entry)
         for (uint32_t n = 0; n < half_pages; n++)
         {
             read_pages_.Set(start + n, 0);
-            if ((entry_lo & 4) != 0)
+            if ((entry_lo & kEntryLoDirty) != 0)
             {
                 write_pages_.Set(start + n, 0);
             }
@@ -703,8 +719,8 @@ void Cpu::UnmapTlbPages(const TlbEntry& entry)
 
 void Cpu::MapTlbPages(const TlbEntry& entry)
 {
-    const uint32_t half_pages = (((entry.page_mask | 0x1FFF) >> 1) + 1) >> 12;
-    const uint32_t first_page = static_cast<uint32_t>(entry.entry_hi) >> 12;
+    const uint32_t half_pages = HalfSize(entry) >> kPageBits;
+    const uint32_t first_page = static_cast<uint32_t>(entry.entry_hi) >> kPageBits;
 
     // An arcade board has RAM above the console's physical addresses. Its games map pages there.
     const bool board = system_.GetOptions().board != Board::kConsole;
@@ -714,18 +730,18 @@ void Cpu::MapTlbPages(const TlbEntry& entry)
         // players refuse a half in kseg0 or kseg1, or one past the physical addresses.
         const uint32_t entry_lo = half == 0 ? entry.entry_lo0 : entry.entry_lo1;
         const uint32_t start = first_page + static_cast<uint32_t>(half) * half_pages;
-        const uint32_t frame = static_cast<uint32_t>((uint64_t{entry_lo} >> 6) << 12);
-        const bool direct = ((start << 12) & 0xC0000000u) == 0x80000000u;
-        if ((entry_lo & 2) == 0 || direct || (frame >= 0x20000000u && !board))
+        const uint32_t frame = static_cast<uint32_t>(FrameOf(entry_lo));
+        const bool direct = ((start << kPageBits) & kSegmentMask) == kKseg0;
+        if ((entry_lo & kEntryLoValid) == 0 || direct || (frame >= kPhysicalAddressLimit && !board))
         {
             continue;
         }
 
         for (uint32_t n = 0; n < half_pages; n++)
         {
-            const uint32_t value = (frame + (n << 12)) | 1;
+            const uint32_t value = (frame + (n << kPageBits)) | 1;
             read_pages_.Set(start + n, value);
-            if ((entry_lo & 4) != 0)
+            if ((entry_lo & kEntryLoDirty) != 0)
             {
                 write_pages_.Set(start + n, value);
             }
@@ -740,37 +756,28 @@ Cpu::TlbResult Cpu::LookupTlb(uint64_t vaddr, bool write, uint32_t& paddr) const
         return LookupTlbPages(vaddr, write, paddr);
     }
 
-    const uint32_t asid = static_cast<uint32_t>(entry_hi_ & 0xFF);
+    const uint32_t asid = static_cast<uint32_t>(entry_hi_ & kEntryHiAsidMask);
     for (const TlbEntry& entry : tlb_)
     {
-        const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
-        if ((vaddr & mask) != (entry.entry_hi & mask))
-        {
-            continue;
-        }
-        if ((vaddr >> 62) != (entry.entry_hi >> 62))
-        {
-            continue;
-        }
-        if (!entry.global && (entry.entry_hi & 0xFF) != asid)
+        if (!Matches(entry, vaddr, asid))
         {
             continue;
         }
 
         // The page's offset bits, and the bit above them that picks the even or the odd page.
-        const uint64_t offset_mask = (uint64_t{entry.page_mask} | 0x1FFF) >> 1;
+        const uint64_t offset_mask = HalfSize(entry) - 1;
         const bool odd = (vaddr & (offset_mask + 1)) != 0;
         const uint32_t entry_lo = odd ? entry.entry_lo1 : entry.entry_lo0;
-        if ((entry_lo & 2) == 0)
+        if ((entry_lo & kEntryLoValid) == 0)
         {
             return TlbResult::kInvalid;
         }
-        if (write && (entry_lo & 4) == 0)
+        if (write && (entry_lo & kEntryLoDirty) == 0)
         {
             return TlbResult::kModified;
         }
 
-        const uint64_t frame = (uint64_t{entry_lo} >> 6) << 12;
+        const uint64_t frame = FrameOf(entry_lo);
         paddr = static_cast<uint32_t>(frame + (vaddr & offset_mask));
         return TlbResult::kHit;
     }
@@ -786,26 +793,28 @@ bool Cpu::Translate(uint64_t vaddr, Access access, uint32_t& paddr)
     case Segment::kDirect:
         paddr = segment.paddr;
         return true;
+
     case Segment::kError:
         RaiseAddressError(vaddr, access);
         return false;
+
     case Segment::kTlb:
         break;
     }
 
     const TlbResult result = LookupTlb(vaddr, access == Access::kStore, paddr);
-    if (result != TlbResult::kHit && tlb_pages_ && MapsPastPhysical(vaddr))
-    {
-        refused_board_pages_++;
-    }
-    if (result != TlbResult::kHit && tlb_pages_ && access == Access::kStore)
-    {
-        // The legacy players drop a store to a page with no writable mapping, and raise nothing.
-        return false;
-    }
-
     if (result != TlbResult::kHit && tlb_pages_)
     {
+        if (MapsPastPhysical(vaddr))
+        {
+            refused_board_pages_++;
+        }
+        if (access == Access::kStore)
+        {
+            // The legacy players drop a store to a page with no writable mapping, and raise nothing.
+            return false;
+        }
+
         RaisePageFault(vaddr, access, result == TlbResult::kInvalid);
         return false;
     }
@@ -814,12 +823,15 @@ bool Cpu::Translate(uint64_t vaddr, Access access, uint32_t& paddr)
     {
     case TlbResult::kHit:
         return true;
+
     case TlbResult::kMiss:
         RaiseTlbException(vaddr, access, true, false);
         return false;
+
     case TlbResult::kInvalid:
         RaiseTlbException(vaddr, access, false, false);
         return false;
+
     case TlbResult::kModified:
         RaiseTlbException(vaddr, access, false, true);
         return false;
@@ -868,11 +880,12 @@ void Cpu::SetTlb(int index, const TlbEntry& entry)
     entry_lo1_ = entry.entry_lo1 & kEntryLoMask;
     if (entry.global)
     {
-        entry_lo0_ |= 1;
-        entry_lo1_ |= 1;
+        entry_lo0_ |= kEntryLoGlobal;
+        entry_lo1_ |= kEntryLoGlobal;
     }
 
     TlbWrite(index & 31);
+
     page_mask_ = page_mask;
     entry_hi_ = entry_hi;
     entry_lo0_ = entry_lo0;
@@ -894,13 +907,13 @@ void Cpu::TlbWrite(int index)
         UnmapTlbPages(entry);
     }
 
-    uint32_t page_mask = page_mask_ & 0x01554000;
+    uint32_t page_mask = page_mask_ & kPageMaskPairs;
     page_mask |= page_mask >> 1;
     entry.page_mask = page_mask;
-    entry.global = (entry_lo0_ & entry_lo1_ & 1) != 0;
-    const uint32_t global_bit = entry.global ? 1 : 0;
-    entry.entry_lo0 = (entry_lo0_ & 0x03FFFFFE) | global_bit;
-    entry.entry_lo1 = (entry_lo1_ & 0x03FFFFFE) | global_bit;
+    entry.global = (entry_lo0_ & entry_lo1_ & kEntryLoGlobal) != 0;
+    const uint32_t global_bit = entry.global ? kEntryLoGlobal : 0;
+    entry.entry_lo0 = (entry_lo0_ & kEntryLoKeptBits) | global_bit;
+    entry.entry_lo1 = (entry_lo1_ & kEntryLoKeptBits) | global_bit;
     entry.entry_hi = entry_hi_ & (kEntryHiMask & ~uint64_t{page_mask});
     translation_epoch_++;
 
@@ -912,7 +925,7 @@ void Cpu::TlbWrite(int index)
 
 void Cpu::TlbRead()
 {
-    const uint32_t index = index_ & 0x3F;
+    const uint32_t index = index_ & kIndexEntryMask;
     if (index > 31)
     {
         return;
@@ -928,27 +941,15 @@ void Cpu::TlbRead()
 
 void Cpu::TlbProbe()
 {
-    index_ = 0x80000000;
-    const uint32_t asid = static_cast<uint32_t>(entry_hi_ & 0xFF);
+    index_ = kIndexProbeFailure;
+    const uint32_t asid = static_cast<uint32_t>(entry_hi_ & kEntryHiAsidMask);
     for (uint32_t i = 0; i < 32; i++)
     {
-        const TlbEntry& entry = tlb_[i];
-        const uint64_t mask = kVpn2Mask & ~uint64_t{entry.page_mask};
-        if ((entry.entry_hi & mask) != (entry_hi_ & mask))
+        if (Matches(tlb_[i], entry_hi_, asid))
         {
-            continue;
+            index_ = i;
+            return;
         }
-        if ((entry.entry_hi >> 62) != (entry_hi_ >> 62))
-        {
-            continue;
-        }
-        if (!entry.global && (entry.entry_hi & 0xFF) != asid)
-        {
-            continue;
-        }
-
-        index_ = i;
-        return;
     }
 }
 
@@ -982,8 +983,7 @@ void Cpu::Eret()
 
 void Cpu::ExecuteCop0(uint32_t instruction)
 {
-    const bool kernel = (status_ & (kStatusExl | kStatusErl)) != 0 || ((status_ >> 3) & 3) == 0;
-    const bool usable = kernel || (status_ & kStatusCu0) != 0;
+    const bool usable = KernelMode() || (status_ & kStatusCu0) != 0;
     const uint32_t rs = Rs(instruction);
     const uint32_t rt = Rt(instruction);
     const int rd = static_cast<int>(Rd(instruction));
@@ -993,54 +993,33 @@ void Cpu::ExecuteCop0(uint32_t instruction)
         switch (rs)
         {
         case 0x00:
-            if (!usable)
-            {
-                RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
-                return;
-            }
-
-            gpr_[rt] = SignExtend32(ReadCop0(rd));
-            return;
-
         case 0x01:
-            if (!usable)
-            {
-                RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
-                return;
-            }
-            if (!Allows64Bit())
-            {
-                RaiseException(ExceptionCode::kReservedInstruction);
-                return;
-            }
-
-            gpr_[rt] = ReadCop0(rd);
-            return;
-
         case 0x04:
-            if (!usable)
-            {
-                RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
-                return;
-            }
-
-            MoveToCop0(rd, gpr_[rt]);
-            return;
-
         case 0x05:
-            if (!usable)
             {
-                RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
-                return;
-            }
-            if (!Allows64Bit())
-            {
-                RaiseException(ExceptionCode::kReservedInstruction);
-                return;
-            }
+                // MFC0, DMFC0, MTC0 and DMTC0. The doubleword moves are reserved in 32-bit user and supervisor modes.
+                const bool doubleword = (rs & 1) != 0;
+                if (!usable)
+                {
+                    RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
+                    return;
+                }
+                if (doubleword && !Allows64Bit())
+                {
+                    RaiseException(ExceptionCode::kReservedInstruction);
+                    return;
+                }
 
-            MoveToCop0(rd, gpr_[rt]);
-            return;
+                if (rs >= 0x04)
+                {
+                    MoveToCop0(rd, gpr_[rt]);
+                }
+                else
+                {
+                    gpr_[rt] = doubleword ? ReadCop0(rd) : SignExtend32(ReadCop0(rd));
+                }
+                return;
+            }
 
         case 0x02:
         case 0x06:
@@ -1059,7 +1038,7 @@ void Cpu::ExecuteCop0(uint32_t instruction)
     if (funct == 0x20 && system_.GetOptions().is_viewer)
     {
         // Test programs probe for an emulator's logging extensions with this function. Answering that there are none
-        // sends their text to the debug port.
+        // sends their text to the debug port. The probe names its destination register in bits 20 to 24, not in rt.
         gpr_[(instruction >> 20) & 31] = 0;
         return;
     }
@@ -1084,7 +1063,7 @@ void Cpu::ExecuteCop0(uint32_t instruction)
         TlbRead();
         break;
     case 0x02:
-        TlbWrite(static_cast<int>(index_ & 0x3F));
+        TlbWrite(static_cast<int>(index_ & kIndexEntryMask));
         break;
     case 0x06:
         TlbWrite(static_cast<int>(Random()));
@@ -1106,7 +1085,7 @@ CpuState Cpu::State() const
     state.lo = lo_;
     state.pc = pc_;
     state.fpr = fpr_;
-    state.fcr0 = 0x00000A00;
+    state.fcr0 = kFcr0;
     state.fcr31 = fcr31_;
     for (int i = 0; i < 32; i++)
     {
@@ -1124,11 +1103,11 @@ void Cpu::SetState(const CpuState& state)
     hi_ = state.hi;
     lo_ = state.lo;
     fpr_ = state.fpr;
-    fcr31_ = state.fcr31 & 0x0183FFFF;
+    SetFcr31(state.fcr31);
 
     // Status first: it picks the mode that the other registers are read in.
     WriteStatus(static_cast<uint32_t>(state.cop0[kCop0Status]));
-    wired_ = static_cast<uint32_t>(state.cop0[kCop0Wired]) & 0x3F;
+    wired_ = static_cast<uint32_t>(state.cop0[kCop0Wired]) & kWiredMask;
     for (int i = 0; i < 32; i++)
     {
         if (i != kCop0Status && i != kCop0Wired && i != kCop0Compare && i != kCop0Count)
@@ -1139,6 +1118,8 @@ void Cpu::SetState(const CpuState& state)
 
     compare_ = static_cast<uint32_t>(state.cop0[kCop0Compare]);
     WriteCount(static_cast<uint32_t>(state.cop0[kCop0Count]));
+
+    // Register 7 doesn't exist. A read of it gives the latch. The state keeps the latch there.
     latch_ = state.cop0[7];
     ll_bit_ = state.ll_bit;
     SetPc(state.pc);

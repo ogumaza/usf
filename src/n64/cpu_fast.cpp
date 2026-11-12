@@ -19,16 +19,28 @@
 
 #include "xsflib/bytes.h"
 
+#include "n64/bits.h"
+#include "n64/constants.h"
 #include "n64/cpu.h"
+#include "n64/cpu_cop0.h"
+#include "n64/mips_registers.h"
 #include "n64/system.h"
+
+// Forces a lambda inline. The macro goes after the lambda's parameter list. A compiler that supports neither attribute
+// gets none.
+#if defined(__GNUC__) || defined(__clang__)
+#define USF_INLINE_LAMBDA __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define USF_INLINE_LAMBDA [[msvc::forceinline]]
+#else
+#define USF_INLINE_LAMBDA
+#endif
 
 namespace usf::n64
 {
-
 namespace
 {
 
-constexpr uint32_t kPageInstructions = 0x400;
 constexpr uint32_t kNoBranch = ~0u;
 
 // The longest wait loop, from its first instruction to its branch.
@@ -38,20 +50,15 @@ constexpr uint32_t kMaxWaitDistance = 6;
 constexpr int kMaxWaitChanges = 4;
 
 // VI_CURRENT's address in KSEG1.
-constexpr uint64_t kViCurrent = 0xFFFFFFFFA4400010ull;
-
-uint64_t SignExtend32(uint64_t value)
-{
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(static_cast<uint32_t>(value))));
-}
+constexpr uint64_t kViCurrentKseg1 = SignExtend32(kKseg1 + kViCurrent);
 
 // A kernel-mode address with 32 bits. Returns false for an address that has to go through Translate.
 inline bool Direct(uint64_t vaddr, uint32_t& paddr)
 {
     const uint32_t address = static_cast<uint32_t>(vaddr);
-    paddr = address & 0x1FFFFFFF;
+    paddr = address & kPhysicalAddressMask;
 
-    return (address >> 30) == 2 && SignExtend32(address) == vaddr;
+    return (address & kSegmentMask) == kKseg0 && SignExtend32(address) == vaddr;
 }
 
 } // namespace
@@ -244,7 +251,7 @@ Cpu::FastInstruction Cpu::DecodeFast(uint32_t instruction)
     case 0x02:
     case 0x03:
         decoded.op = (instruction >> 26) == 0x02 ? FastOp::kJ : FastOp::kJal;
-        decoded.immediate = static_cast<int32_t>((instruction & 0x03FFFFFF) << 2);
+        decoded.immediate = static_cast<int32_t>((instruction & mips::kJumpIndexMask) << 2);
         break;
 
     case 0x04:
@@ -405,7 +412,7 @@ Cpu::FastInstruction Cpu::DecodeFast(uint32_t instruction)
 
 Cpu::FastPage& Cpu::FastPageAt(uint32_t paddr)
 {
-    const size_t page = paddr >> 12;
+    const size_t page = paddr >> kPageBits;
     if (page >= fast_pages_.size())
     {
         fast_pages_.resize(page + 1);
@@ -467,8 +474,8 @@ int Cpu::WaitLoopRegisters(const FastInstruction* first, uint32_t count, std::ar
         case FastOp::kSb:
         case FastOp::kSh:
         case FastOp::kSw:
-            // Only a branch to itself may store, in its delay slot. It writes the same value to the same place on
-            // each pass. A longer loop might read back what it stored.
+            // Only a branch to itself may store, in its delay slot. It writes the same value to the same place on each
+            // pass. A longer loop might read back what it stored.
             if (count != 2)
             {
                 return -1;
@@ -516,9 +523,8 @@ int Cpu::WaitLoopRegisters(const FastInstruction* first, uint32_t count, std::ar
 
 bool Cpu::RunFast(uint64_t until)
 {
-    const bool kernel = (status_ & (kStatusExl | kStatusErl)) != 0 || ((status_ >> 3) & 3) == 0;
     const uint32_t pc32 = static_cast<uint32_t>(pc_);
-    if (!kernel || (status_ & kStatusKx) != 0 || branch_pending_ || (pc32 & 3) != 0 || SignExtend32(pc32) != pc_)
+    if (!KernelMode() || (status_ & kStatusKx) != 0 || branch_pending_ || (pc32 & 3) != 0 || SignExtend32(pc32) != pc_)
     {
         return false;
     }
@@ -526,7 +532,7 @@ bool Cpu::RunFast(uint64_t until)
     uint32_t page_paddr = 0;
     if (!Direct(pc_, page_paddr))
     {
-        const uint32_t mapping = read_pages_.Get(pc32 >> 12);
+        const uint32_t mapping = read_pages_.Get(pc32 >> kPageBits);
         if (mapping == 0)
         {
             return false;
@@ -535,7 +541,7 @@ bool Cpu::RunFast(uint64_t until)
         page_paddr = mapping;
     }
 
-    page_paddr &= ~0xFFFu;
+    page_paddr &= ~kPageOffsetMask;
     const uint32_t load_limit = system_.DirectRdramSize();
     if (page_paddr >= load_limit)
     {
@@ -548,15 +554,15 @@ bool Cpu::RunFast(uint64_t until)
 
     // Nothing that RunFast runs can change these. An event that changes them ends the run.
     const uint64_t ticks = system_.TicksPerInstruction();
-    const uint64_t due = system_.NextCheckTime();
+    const uint64_t due = system_.NextEvent();
     const uint32_t store_limit = system_.PlainStoreLimit();
     uint8_t* const rdram = system_.RdramData();
     const uint8_t* const code = rdram + page_paddr;
     FastInstruction* const page = FastPageAt(page_paddr).data();
-    const uint64_t base = pc_ & ~uint64_t{0xFFF};
+    const uint64_t base = pc_ & ~uint64_t{kPageOffsetMask};
     uint64_t* const gpr = gpr_.data();
 
-    uint32_t index = (pc32 & 0xFFF) >> 2;
+    uint32_t index = (pc32 & kPageOffsetMask) >> 2;
     uint64_t now = now_;
     uint64_t steps = 0;
     bool in_slot = false; // The instruction at `index` is in a delay slot.
@@ -580,7 +586,7 @@ bool Cpu::RunFast(uint64_t until)
     // loop.
 
     // Leaves the state for Step, as if `index` were the next instruction to run. `slot` says that it's in a delay slot.
-    const auto leave = [&](bool slot) __attribute__((always_inline))
+    const auto leave = [&](bool slot) USF_INLINE_LAMBDA
     {
         now_ = now;
         instructions_ += steps;
@@ -589,10 +595,10 @@ bool Cpu::RunFast(uint64_t until)
         branch_pending_ = slot;
     };
 
-    // Translates a load's or a store's address. Returns false for what has to go through Step: a misaligned address,
-    // no mapping or a device.
+    // Translates a load's or a store's address. Returns false for what has to go through Step: a misaligned address, no
+    // mapping or a device.
     const auto translate = [&](uint64_t vaddr, uint32_t size, const PageTable& pages, uint32_t limit, uint32_t& paddr)
-                               __attribute__((always_inline))
+                               USF_INLINE_LAMBDA
     {
         if ((vaddr & (size - 1)) != 0)
         {
@@ -602,13 +608,13 @@ bool Cpu::RunFast(uint64_t until)
         if (!Direct(vaddr, paddr))
         {
             const uint32_t address = static_cast<uint32_t>(vaddr);
-            const uint32_t mapping = pages.Get(address >> 12);
+            const uint32_t mapping = pages.Get(address >> kPageBits);
             if (mapping == 0 || SignExtend32(address) != vaddr)
             {
                 return false;
             }
 
-            paddr = (mapping & ~0xFFFu) | (address & 0xFFF);
+            paddr = (mapping & ~kPageOffsetMask) | (address & kPageOffsetMask);
         }
 
         return paddr < limit;
@@ -616,7 +622,7 @@ bool Cpu::RunFast(uint64_t until)
 
     for (;;)
     {
-        if (now >= until || index >= kPageInstructions)
+        if (now >= until || index >= kFastPageInstructions)
         {
             leave(in_slot);
             return true;
@@ -636,7 +642,7 @@ bool Cpu::RunFast(uint64_t until)
         const uint64_t here = base + uint64_t{index} * 4;
 
         // A branch in a delay slot, and a branch that may be an idle loop, go through Step. Returns false for those.
-        const auto branch = [&](bool taken, uint64_t target) __attribute__((always_inline))
+        const auto branch = [&](bool taken, uint64_t target) USF_INLINE_LAMBDA
         {
             if (in_slot)
             {
@@ -645,7 +651,8 @@ bool Cpu::RunFast(uint64_t until)
 
             if (taken)
             {
-                if (target == here && (index + 1 == kPageInstructions || xsflib::LoadBe32(code + (index + 1) * 4) == 0))
+                if (target == here &&
+                    (index + 1 == kFastPageInstructions || xsflib::LoadBe32(code + (index + 1) * 4) == 0))
                 {
                     return false;
                 }
@@ -653,7 +660,7 @@ bool Cpu::RunFast(uint64_t until)
                 jump = true;
                 jump_target = target;
                 if (!instruction.not_a_wait && target <= here && here - target <= kMaxWaitDistance * 4 &&
-                    index + 1 < kPageInstructions && (target & ~uint64_t{0xFFF}) == base)
+                    index + 1 < kFastPageInstructions && (target & ~uint64_t{kPageOffsetMask}) == base)
                 {
                     loop_branch = index;
                 }
@@ -782,7 +789,7 @@ bool Cpu::RunFast(uint64_t until)
             break;
 
         case FastOp::kJ:
-            if (!branch(true, ((here + 4) & 0xFFFFFFFFF0000000ull) | immediate))
+            if (!branch(true, ((here + 4) & mips::kJumpRegionMask) | immediate))
             {
                 leave(in_slot);
                 return false;
@@ -792,13 +799,13 @@ bool Cpu::RunFast(uint64_t until)
             break;
 
         case FastOp::kJal:
-            if (!branch(true, ((here + 4) & 0xFFFFFFFFF0000000ull) | immediate))
+            if (!branch(true, ((here + 4) & mips::kJumpRegionMask) | immediate))
             {
                 leave(in_slot);
                 return false;
             }
 
-            gpr[31] = here + 8;
+            gpr[mips::kRa] = here + 8;
             next_in_slot = true;
             break;
 
@@ -953,7 +960,7 @@ bool Cpu::RunFast(uint64_t until)
                 const uint64_t vaddr = gpr[rs] + immediate;
                 if (!translate(vaddr, 4, read_pages_, load_limit, paddr))
                 {
-                    if (vaddr != kViCurrent)
+                    if (vaddr != kViCurrentKseg1)
                     {
                         leave(in_slot);
                         return false;
@@ -1125,7 +1132,7 @@ bool Cpu::RunFast(uint64_t until)
                     return false;
                 }
 
-                const bool taken = ((fcr31_ & (1u << 23)) != 0) == ((rt & 1) != 0);
+                const bool taken = ((fcr31_ & kFcr31Condition) != 0) == ((rt & 1) != 0);
                 if (!branch(taken, here + 4 + immediate))
                 {
                     leave(in_slot);
@@ -1225,8 +1232,8 @@ bool Cpu::RunFast(uint64_t until)
         {
             jump = false;
             resume = jump_target;
-            same_page = (resume & ~uint64_t{0xFFF}) == base && (resume & 3) == 0;
-            index = static_cast<uint32_t>(resume & 0xFFF) >> 2;
+            same_page = (resume & ~uint64_t{kPageOffsetMask}) == base && (resume & 3) == 0;
+            index = static_cast<uint32_t>(resume & kPageOffsetMask) >> 2;
         }
 
         if (loop_branch != kNoBranch)
@@ -1245,6 +1252,7 @@ bool Cpu::RunFast(uint64_t until)
                         page[i] = DecodeFast(body_word);
                     }
                 }
+
                 watch.branch = end;
                 watch.changes = 0;
                 watch.count = WaitLoopRegisters(page + index, end + 2 - index, watch.registers);

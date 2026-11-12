@@ -3,10 +3,10 @@
 // The player on small programs made with the MIPS encoder. The anchor of the checks is the arithmetic of the programs
 // and the AI's registers: the samples that a program writes, and a rate of the video clock over DACRATE + 1.
 //
-// The main program takes a start value in a0 and plays buffers of 256 frames. Frame n of the stream holds start + n
-// on the left and start + n + 1 on the right. Each buffer starts when the one before has ended. The program changes
-// the rate between two buffers, and later stops sending buffers. The second program measures how long the AI stays
-// busy, for a check of the flags.
+// The main program takes a start value in a0 and plays buffers of 256 frames. Frame n of the stream holds start + n on
+// the left and start + n + 1 on the right. Each buffer starts when the one before has ended. The program changes the
+// rate between two buffers, and later stops sending buffers. The second program measures how long the AI stays busy,
+// for a check of the flags.
 
 #include "usf/player.h"
 
@@ -20,10 +20,14 @@
 #include "xsflib/player/player.h"
 #include "xsflib/psf/psf.h"
 #include "xsflib/testing/check.h"
+#include "xsflib/testing/sets.h"
 #include "xsflib/testing/temp_folder.h"
 
+#include "n64/save_state.h"
 #include "n64/system.h"
 #include "rip/mips.h"
+#include "test_mips.h"
+#include "test_programs.h"
 #include "usf/usf_file.h"
 
 namespace
@@ -31,9 +35,23 @@ namespace
 
 namespace mips = usf::rip::mips;
 
-constexpr uint32_t kCode = 0x00001000;
+using mips::kA0;
+using mips::kS0;
+using mips::kS1;
+using mips::kS2;
+using mips::kT0;
+using mips::kT1;
+using mips::kT2;
+using mips::kT3;
+using mips::kT4;
+using mips::kT5;
+using mips::kZero;
+using usf::n64::kKseg0;
+using usf::testing::kCode;
+using usf::testing::kStateA0;
+
 constexpr uint32_t kBuffer = 0x00200000;
-constexpr uint32_t kKseg0 = 0x80000000;
+constexpr uint32_t kRomSize = 0x1000;
 
 constexpr uint32_t kFramesPerBuffer = 256;
 constexpr uint32_t kBuffersBeforeChange = 4; // The rate changes after this many buffers.
@@ -47,46 +65,11 @@ constexpr uint32_t kVideoClock = 48681812;
 constexpr uint32_t kRateFirst = kVideoClock / (kDacRateFirst + 1);
 constexpr uint32_t kRateSecond = kVideoClock / (kDacRateSecond + 1);
 
-constexpr uint32_t kStateA0 = 0x050 + 8 * 4; // The state image's position of register a0.
 constexpr uint16_t kStart = 0x1200;
 
-// Starts the AI: s2 ends up with the base of its registers.
-void EmitAiSetup(mips::Assembler& code)
+// Each buffer: frame i holds the counter + i on the left and one more on the right.
+void EmitCountingBuffer(mips::Assembler& code)
 {
-    using mips::kS2;
-    using mips::kT0;
-    using mips::kZero;
-
-    code.Emit(mips::Lui(kS2, 0xA450));
-    code.Emit(mips::Addiu(kT0, kZero, kDacRateFirst));
-    code.Emit(mips::Sw(kT0, kS2, 0x10));
-    code.Emit(mips::Addiu(kT0, kZero, 15));
-    code.Emit(mips::Sw(kT0, kS2, 0x14));
-    code.Emit(mips::Addiu(kT0, kZero, 1));
-    code.Emit(mips::Sw(kT0, kS2, 0x8));
-}
-
-std::vector<uint32_t> MakeCountingProgram()
-{
-    using mips::kA0;
-    using mips::kS0;
-    using mips::kS1;
-    using mips::kS2;
-    using mips::kT0;
-    using mips::kT1;
-    using mips::kT2;
-    using mips::kT3;
-    using mips::kT4;
-    using mips::kT5;
-    using mips::kZero;
-
-    mips::Assembler code(kKseg0 | kCode);
-    EmitAiSetup(code);
-    code.Emit(mips::Addu(kS0, kA0, kZero));
-    code.Emit(mips::Addiu(kS1, kZero, 0));
-
-    // Each buffer: frame i holds the counter + i on the left and one more on the right.
-    const uint32_t loop = code.Here();
     code.Emit(mips::Lui(kT0, mips::High(kKseg0 | kBuffer)));
     code.Emit(mips::Addiu(kT1, kZero, 0));
     const uint32_t fill = code.Here();
@@ -103,21 +86,20 @@ std::vector<uint32_t> MakeCountingProgram()
     code.Emit(mips::Addiu(kT5, kZero, kFramesPerBuffer));
     code.Bne(kT1, kT5, fill);
     code.Emit(mips::kNop);
+}
 
-    // Hand the buffer to the AI, and wait until it has ended.
-    code.Emit(mips::Lui(kT0, kBuffer >> 16));
-    code.Emit(mips::Sw(kT0, kS2, 0x0));
-    code.Emit(mips::Addiu(kT0, kZero, kFramesPerBuffer * 4));
-    code.Emit(mips::Sw(kT0, kS2, 0x4));
+// Hand the buffer to the AI, and wait until it has ended.
+void EmitPlayBuffer(mips::Assembler& code)
+{
+    usf::testing::EmitAiBuffer(code, kBuffer >> 16, kFramesPerBuffer * 4);
     code.Emit(mips::Addiu(kS0, kS0, kFramesPerBuffer));
     code.Emit(mips::Addiu(kS1, kS1, 1));
-    const uint32_t wait = code.Here();
-    code.Emit(mips::Lw(kT0, kS2, 0xC));
-    code.Emit(mips::Srl(kT0, kT0, 30));
-    code.Bne(kT0, kZero, wait);
-    code.Emit(mips::kNop);
+    usf::testing::EmitAiWait(code, 30);
+}
 
-    // The rate changes between two buffers.
+// The rate changes between two buffers.
+void EmitRateChange(mips::Assembler& code)
+{
     code.Emit(mips::Addiu(kT0, kZero, kBuffersBeforeChange));
     const size_t same_rate = code.Size();
     code.Bne(kS1, kT0, code.Here() + 4);
@@ -125,37 +107,39 @@ std::vector<uint32_t> MakeCountingProgram()
     code.Emit(mips::Addiu(kT0, kZero, kDacRateSecond));
     code.Emit(mips::Sw(kT0, kS2, 0x10));
     code.SetBranchTarget(same_rate, code.Here());
+}
 
-    // The program stops sending buffers, but it goes on running.
+// The program stops sending buffers, but it goes on running.
+void EmitStop(mips::Assembler& code, uint32_t loop)
+{
     code.Emit(mips::Addiu(kT0, kZero, kBuffersBeforeStop));
     code.Bne(kS1, kT0, loop);
     code.Emit(mips::kNop);
     const uint32_t spin = code.Here();
     code.J(spin);
     code.Emit(mips::kNop);
+}
+
+std::vector<uint32_t> MakeCountingProgram()
+{
+    mips::Assembler code(kKseg0 | kCode);
+    usf::testing::EmitAiSetup(code, mips::Addiu(kT0, kZero, kDacRateFirst));
+    code.Emit(mips::Addu(kS0, kA0, kZero));
+    code.Emit(mips::Addiu(kS1, kZero, 0));
+
+    const uint32_t loop = code.Here();
+    EmitCountingBuffer(code);
+    EmitPlayBuffer(code);
+    EmitRateChange(code);
+    EmitStop(code, loop);
 
     return code.Words();
 }
 
-// One buffer, then a count in s0 of the times that the AI read as busy, then a buffer of samples that hold that count,
-// capped at 0x7FFF. The AI then stays quiet.
-std::vector<uint32_t> MakeBusyProgram()
+// One buffer, then a count in s0 of the times that the AI reads as busy until it has played the buffer.
+void EmitBusyCount(mips::Assembler& code)
 {
-    using mips::kS0;
-    using mips::kS2;
-    using mips::kT0;
-    using mips::kT1;
-    using mips::kT2;
-    using mips::kT3;
-    using mips::kZero;
-
-    mips::Assembler code(kKseg0 | kCode);
-    EmitAiSetup(code);
-
-    code.Emit(mips::Lui(kT0, kBuffer >> 16));
-    code.Emit(mips::Sw(kT0, kS2, 0x0));
-    code.Emit(mips::Addiu(kT0, kZero, kFramesPerBuffer * 4));
-    code.Emit(mips::Sw(kT0, kS2, 0x4));
+    usf::testing::EmitAiBuffer(code, kBuffer >> 16, kFramesPerBuffer * 4);
     code.Emit(mips::Addiu(kS0, kZero, 0));
     const uint32_t wait = code.Here();
     code.Emit(mips::Addiu(kS0, kS0, 1));
@@ -163,8 +147,11 @@ std::vector<uint32_t> MakeBusyProgram()
     code.Emit(mips::Srl(kT0, kT0, 30));
     code.Bne(kT0, kZero, wait);
     code.Emit(mips::kNop);
+}
 
-    // The cap.
+// Caps the count in s0 at 0x7FFF.
+void EmitCap(mips::Assembler& code)
+{
     code.Emit(mips::Addiu(kT1, kZero, 0x7FFF));
     code.Emit(mips::Sltu(kT2, kT1, kS0));
     const size_t below_cap = code.Size();
@@ -172,8 +159,11 @@ std::vector<uint32_t> MakeBusyProgram()
     code.Emit(mips::kNop);
     code.Emit(mips::Addu(kS0, kT1, kZero));
     code.SetBranchTarget(below_cap, code.Here());
+}
 
-    // The buffer.
+// A buffer whose samples hold the count in s0, handed to the AI. The AI then stays quiet.
+void EmitCountBuffer(mips::Assembler& code)
+{
     code.Emit(mips::Sll(kT2, kS0, 16));
     code.Emit(mips::Or(kT2, kT2, kS0));
     code.Emit(mips::Lui(kT0, mips::High(kKseg0 | kBuffer)));
@@ -191,35 +181,19 @@ std::vector<uint32_t> MakeBusyProgram()
     const uint32_t spin = code.Here();
     code.J(spin);
     code.Emit(mips::kNop);
+}
+
+// One buffer, then a count in s0 of the times that the AI read as busy, then a buffer of samples that hold that count,
+// capped at 0x7FFF. The AI then stays quiet.
+std::vector<uint32_t> MakeBusyProgram()
+{
+    mips::Assembler code(kKseg0 | kCode);
+    usf::testing::EmitAiSetup(code, mips::Addiu(kT0, kZero, kDacRateFirst));
+    EmitBusyCount(code);
+    EmitCap(code);
+    EmitCountBuffer(code);
 
     return code.Words();
-}
-
-std::vector<uint8_t> MakeRom()
-{
-    std::vector<uint8_t> rom(0x1000, 0);
-    xsflib::StoreBe32(rom.data(), 0x80371240);
-
-    return rom;
-}
-
-// A state image with `words` about to run from kCode, with no interrupts.
-std::vector<uint8_t> MakeState(const std::vector<uint32_t>& words)
-{
-    usf::n64::Options options;
-    options.timing = usf::n64::Timing::kLegacy;
-    usf::n64::System system(options);
-    system.LoadRom(MakeRom());
-
-    for (size_t i = 0; i < words.size(); i++)
-    {
-        system.WritePhysical32(kCode + 4 * static_cast<uint32_t>(i), words[i]);
-    }
-
-    system.GetCpu().SetCop0(usf::n64::kCop0Status, 0);
-    system.GetCpu().SetPc(0xFFFFFFFF00000000ull | kKseg0 | kCode);
-
-    return system.SaveState();
 }
 
 // A library that holds the ROM and the state, and a mini that holds kStart in a0, the tags and a link to the library.
@@ -229,8 +203,9 @@ public:
     TestSet(const std::vector<uint32_t>& words, xsflib::psf::Tags mini_tags) : folder_("usf_player_test")
     {
         usf::Sections library;
-        library.rom = std::vector<usf::Chunk>{{0, MakeRom()}};
-        library.state = std::vector<usf::Chunk>{{0, MakeState(words)}};
+        library.rom = std::vector<usf::Chunk>{{0, usf::testing::TestRom(kRomSize)}};
+        library.state =
+            std::vector<usf::Chunk>{{0, usf::testing::ProgramState(usf::testing::TestRom(kRomSize), words, 0)}};
         XSFLIB_CHECK(!xsflib::WriteFile(folder_.Path() / "Test.usflib", usf::WriteUsf(library, {})));
 
         std::vector<uint8_t> a0(8, 0);
@@ -253,7 +228,7 @@ public:
 
     void Open(usf::Player& player) const
     {
-        XSFLIB_CHECK(player.Load(MiniPath().string(), xsflib::psf::ReadWholeFile));
+        XSFLIB_CHECK(player.Load(xsflib::Utf8(MiniPath()), xsflib::psf::ReadWholeFile));
         XSFLIB_CHECK(player.Start());
     }
 
@@ -327,23 +302,17 @@ void StoppedGameGivesSilence()
     const TestSet set(MakeCountingProgram(), {});
     usf::Player player;
     set.Open(player);
-    XSFLIB_CHECK(player.Seek(kFramesBeforeStop));
+    CheckFrames(player, 0, kFramesBeforeChange);
+    CheckFrames(player, kFramesBeforeChange, kFramesBeforeStop - kFramesBeforeChange);
 
     // A second of the second rate: all silence, with no end to the track.
-    std::vector<int16_t> frames(size_t{kRateSecond} * 2, 1);
-    size_t got = 0;
-    while (got < kRateSecond)
+    const auto render = [&player](int16_t* out, size_t count)
     {
-        const size_t part = player.Render(frames.data() + got * 2, kRateSecond - got);
-        XSFLIB_CHECK(part > 0);
-        if (part == 0)
-        {
-            break;
-        }
+        return player.Render(out, count);
+    };
+    const std::vector<int16_t> frames = xsflib::testing::RenderFrames(render, kRateSecond, kRateSecond);
 
-        got += part;
-    }
-
+    XSFLIB_CHECK(frames.size() == size_t{kRateSecond} * 2);
     bool silent = true;
     for (int16_t sample : frames)
     {
@@ -354,31 +323,8 @@ void StoppedGameGivesSilence()
     XSFLIB_CHECK(player.GetState() == xsflib::player::State::kPlaying);
 }
 
-void Seeks()
-{
-    const TestSet set(MakeCountingProgram(), {});
-    usf::Player player;
-    set.Open(player);
-
-    // On, across the change of rate.
-    XSFLIB_CHECK(player.Seek(kFramesBeforeChange + 50));
-    XSFLIB_CHECK(player.Position() == kFramesBeforeChange + 50);
-    XSFLIB_CHECK(player.SampleRate() == kRateSecond);
-    CheckFrames(player, kFramesBeforeChange + 50, 10);
-
-    // Back, across the change of rate.
-    XSFLIB_CHECK(player.Seek(100));
-    XSFLIB_CHECK(player.Position() == 100);
-    XSFLIB_CHECK(player.SampleRate() == kRateFirst);
-    CheckFrames(player, 100, 10);
-
-    // To the place where it is.
-    XSFLIB_CHECK(player.Seek(110));
-    CheckFrames(player, 110, 10);
-}
-
 // The count that the program made, from the samples of its second buffer.
-int RenderBusyCount(const std::vector<int16_t>& frames)
+int BusyCount(const std::vector<int16_t>& frames)
 {
     return frames[size_t{kFramesPerBuffer} * 2];
 }
@@ -390,22 +336,21 @@ void AppliesTheFlags()
 {
     constexpr int kFewReads = 16;
     constexpr int kManyReads = 1000;
-    std::vector<int16_t> frames(size_t{kFramesPerBuffer + 1} * 2);
-
+    std::vector<int16_t> quick_frames(size_t{kFramesPerBuffer + 1} * 2);
+    std::vector<int16_t> delayed_frames(size_t{kFramesPerBuffer + 1} * 2);
     const TestSet without(MakeBusyProgram(), {});
-    usf::Player quick;
-    without.Open(quick);
-    XSFLIB_CHECK(quick.Render(frames.data(), kFramesPerBuffer + 1) == kFramesPerBuffer + 1);
-    const int quick_count = RenderBusyCount(frames);
-
     const TestSet with(MakeBusyProgram(), {{"_enableFIFOfull", "1"}});
+    usf::Player quick;
     usf::Player delayed;
+    without.Open(quick);
     with.Open(delayed);
-    XSFLIB_CHECK(delayed.Render(frames.data(), kFramesPerBuffer + 1) == kFramesPerBuffer + 1);
-    const int delayed_count = RenderBusyCount(frames);
 
-    XSFLIB_CHECK(quick_count > 0 && quick_count < kFewReads);
-    XSFLIB_CHECK(delayed_count > kManyReads);
+    const size_t quick_rendered = quick.Render(quick_frames.data(), kFramesPerBuffer + 1);
+    const size_t delayed_rendered = delayed.Render(delayed_frames.data(), kFramesPerBuffer + 1);
+
+    XSFLIB_CHECK(quick_rendered == kFramesPerBuffer + 1 && delayed_rendered == kFramesPerBuffer + 1);
+    XSFLIB_CHECK(BusyCount(quick_frames) > 0 && BusyCount(quick_frames) < kFewReads);
+    XSFLIB_CHECK(BusyCount(delayed_frames) > kManyReads);
 }
 
 void Failures()
@@ -421,7 +366,7 @@ void Failures()
 
     // A file that isn't there.
     usf::Player missing;
-    XSFLIB_CHECK(!missing.Load((set.Folder() / "Nothing.miniusf").string(), xsflib::psf::ReadWholeFile));
+    XSFLIB_CHECK(!missing.Load(xsflib::Utf8(set.Folder() / "Nothing.miniusf"), xsflib::psf::ReadWholeFile));
     XSFLIB_CHECK(!missing.Error().empty());
     XSFLIB_CHECK(!missing.Start());
     XSFLIB_CHECK(missing.SampleRate() == 0);
@@ -429,18 +374,18 @@ void Failures()
 
     // A file with no state in its chain.
     usf::Sections sections;
-    sections.rom = std::vector<usf::Chunk>{{0, MakeRom()}};
+    sections.rom = std::vector<usf::Chunk>{{0, usf::testing::TestRom(kRomSize)}};
     const std::filesystem::path stateless = set.Folder() / "Stateless.usf";
     XSFLIB_CHECK(!xsflib::WriteFile(stateless, usf::WriteUsf(sections, {})));
     usf::Player empty;
-    XSFLIB_CHECK(!empty.Load(stateless.string(), xsflib::psf::ReadWholeFile));
+    XSFLIB_CHECK(!empty.Load(xsflib::Utf8(stateless), xsflib::psf::ReadWholeFile));
     XSFLIB_CHECK(!empty.Error().empty());
     XSFLIB_CHECK(!empty.Start());
 
     // A library that isn't there.
     std::filesystem::remove(set.Folder() / "Test.usflib");
     usf::Player unlinked;
-    XSFLIB_CHECK(!unlinked.Load(set.MiniPath().string(), xsflib::psf::ReadWholeFile));
+    XSFLIB_CHECK(!unlinked.Load(xsflib::Utf8(set.MiniPath()), xsflib::psf::ReadWholeFile));
     XSFLIB_CHECK(!unlinked.Error().empty());
 }
 
@@ -454,7 +399,6 @@ int main()
                                         PlaysAChain();
                                         RateChanges();
                                         StoppedGameGivesSilence();
-                                        Seeks();
                                         AppliesTheFlags();
                                         Failures();
                                     });

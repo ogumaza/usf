@@ -29,8 +29,8 @@ namespace usf::n64
 // How time passes.
 enum class Timing
 {
-    // The hardware's rates: the CPU at 93.75 MHz with one instruction a cycle, Count at half that, the RSP at
-    // 62.5 MHz, and the VI, AI, PI and SI on the hardware's clocks.
+    // The hardware's rates: the CPU at 93.75 MHz with one instruction a cycle, Count at half that, the RSP at 62.5 MHz,
+    // and the VI, AI, PI and SI on the hardware's clocks.
     kHardware,
 
     // The legacy players' Count model: each instruction adds 2 to Count, a video field and an audio buffer last the
@@ -80,8 +80,8 @@ struct Options
     Timing timing = Timing::kHardware;
 
     // Graphics tasks (type 1 in the task header) don't run on the RSP. They complete as the legacy players complete
-    // them: SP_STATUS gets halt, broke and signal 2, and the SP and DP interrupts follow. Turn this off to run any
-    // code that the CPU starts on the RSP, as the hardware does.
+    // them: SP_STATUS gets halt, broke and signal 2, and the SP and DP interrupts follow. Turn this off to run any code
+    // that the CPU starts on the RSP, as the hardware does.
     bool skip_graphics_tasks = true;
 
     // The CPU raises its timer interrupt when Count reaches Compare.
@@ -127,8 +127,7 @@ struct Options
 enum class Cic
 {
     kUnknown,
-    k6101,
-    k6102,
+    k6102, // The CIC-NUS-6101 too. It shares the 6102's seed.
     k6103,
     k6105,
     k6106,
@@ -148,7 +147,7 @@ struct BootInfo
 struct AudioBuffer
 {
     std::span<const int16_t> samples;
-    uint32_t sample_rate;
+    uint32_t sample_rate = 0;
 };
 
 // What a snapshot can't hold, and so what makes a moment unquiet.
@@ -161,12 +160,19 @@ struct QuietReport
     bool pi_dma_busy = false;
     bool si_dma_busy = false;
     bool dp_busy = false;
-    int ai_buffers = 0;             // Buffers playing or waiting in the AI.
     bool ai_buffer_waiting = false; // A second buffer waits. A legacy player starts without it.
 
     bool Quiet() const;
     std::string Describe() const;
 };
+
+// Converts a ROM image from the .v64 or the .n64 byte order to console order. Pads the image to a whole number of
+// words.
+void ToConsoleOrder(std::vector<uint8_t>& rom);
+
+// The ROM image's size for a ROM of `rom_size` bytes: the smallest power of two, at least 1 MiB, that covers it. It's
+// 256 MiB at most.
+uint32_t RomImageSize(uint64_t rom_size);
 
 class System
 {
@@ -181,7 +187,15 @@ public:
         kCompare,
         kSpTask,
         kCountWrap, // Without exact events: Count reaches a multiple of 0x80000000. It does nothing.
-        kCount,
+        kEventCount,
+    };
+
+    // The video frame that VI_ORIGIN points at, for tests: its origin, its width and its pixel size in bytes.
+    struct Frame
+    {
+        uint32_t origin = 0;
+        uint32_t width = 0;
+        uint32_t bytes_per_pixel = 0;
     };
 
     explicit System(const Options& options = {});
@@ -196,8 +210,8 @@ public:
     void LoadRomImage(std::vector<uint8_t> rom);
     const std::vector<uint8_t>& Rom() const;
 
-    // A dump of the PIF's boot ROM (1984 bytes), which only the CIC-NUS-6105's IPL3 needs: it reads code that the
-    // PIF's boot code leaves in IMEM. Without it, IMEM stays zero and such a game may not boot.
+    // A dump of the PIF's boot ROM (1984 bytes), which only the CIC-NUS-6105's IPL3 needs: it reads code that the PIF's
+    // boot code leaves in IMEM. Without it, IMEM stays zero and such a game may not boot.
     void SetPifRom(std::vector<uint8_t> pif_rom);
 
     // Resets the system and boots the cartridge: the state that the PIF's boot code leaves for the cartridge's IPL3,
@@ -206,8 +220,8 @@ public:
     BootInfo Boot();
 
     // Resets the system and puts it in the state that the PIF's boot code leaves for IPL3, for the boot chip with
-    // `ipl3_seed`, without running IPL3. The version bit is set only for the CIC-NUS-6101.
-    void PrepareIpl3(uint8_t ipl3_seed, bool version_bit);
+    // `ipl3_seed`, without running IPL3. The version bit, set only for the CIC-NUS-6101, stays clear.
+    void PrepareIpl3(uint8_t ipl3_seed);
 
     // Save states.
     std::vector<uint8_t> SaveState() const;
@@ -219,12 +233,10 @@ public:
     void Run(uint64_t ticks);
     void RunSeconds(double seconds);
     void Stop();
-    bool Stopped() const;
 
     // Stops the run when the CPU is about to execute the instruction at `vaddr`. Several may be set. A run that starts
     // at a breakpoint executes that instruction.
     void AddBreakpoint(uint64_t vaddr);
-    void RemoveBreakpoint(uint64_t vaddr);
     void ClearBreakpoints();
     bool HitBreakpoint() const;
 
@@ -236,7 +248,6 @@ public:
 
     uint64_t TicksPerSecond() const;
     const Options& GetOptions() const;
-    TvType Tv() const;
 
     Cpu& GetCpu();
     const Cpu& GetCpu() const;
@@ -258,8 +269,8 @@ public:
     // Changes bytes of the ROM at a cartridge offset, growing the image if needed.
     void PatchRom(uint32_t offset, std::span<const uint8_t> bytes);
 
-    // Coverage: every ROM word that the CPU or the PI reads, and every RDRAM word read before it is written, from
-    // the moment it's turned on.
+    // Coverage: every ROM word that the CPU or the PI reads, and every RDRAM word read before it is written, from the
+    // moment it's turned on.
     void SetCoverage(bool enabled);
     Coverage* GetCoverage();
 
@@ -282,13 +293,6 @@ public:
     // entries that map frames past the console's physical addresses (Cpu::RefusedBoardPages).
     uint64_t BoardAccesses() const;
 
-    // The video frame that VI_ORIGIN points at, for tests: its origin, its width and its pixel size in bytes.
-    struct Frame
-    {
-        uint32_t origin;
-        uint32_t width;
-        uint32_t bytes_per_pixel;
-    };
     Frame VideoFrame() const;
 
     // The interfaces used by the CPU and the RSP.
@@ -327,17 +331,17 @@ public:
     bool HasBreakpoints() const;
     bool ShouldBreak(uint64_t pc);
     void OnRspBroke();
-    uint64_t NextEvent() const;
+
+    // With the legacy timing: the time from which a check point has something to do. An interrupt that waits in the
+    // queue is due at once.
+    uint64_t NextEvent() const
+    {
+        return interrupt_event_ ? 0 : next_event_;
+    }
 
     // With the legacy timing: the time of the first event in the queue, an interrupt that waits included. A BREAK moves
     // Count there. All ones when nothing is queued.
     uint64_t FirstEventTime() const;
-
-    // With the legacy timing: the time from which a check point has something to do.
-    uint64_t NextCheckTime() const
-    {
-        return interrupt_event_ ? 0 : next_event_;
-    }
 
     // With the legacy timing: what a read of VI_CURRENT at `time` returns, and the first later time at which the value
     // can differ. Until the next event, nothing else changes the value.
@@ -365,10 +369,12 @@ public:
     void DmaWriteRdram(uint32_t address, const uint8_t* data, uint32_t length);
 
 private:
-    static constexpr uint64_t kNever = ~uint64_t{0};
-
     struct Mi
     {
+        // The registers that the code names by index.
+        static constexpr uint32_t kMode = 0;
+        static constexpr uint32_t kMask = 3;
+
         uint32_t mode = 0;
         uint32_t version = 0x02020102;
         uint32_t interrupt = 0;
@@ -377,7 +383,21 @@ private:
 
     struct Vi
     {
-        std::array<uint32_t, 14> registers{};
+        // The registers by index.
+        static constexpr uint32_t kStatus = 0;
+        static constexpr uint32_t kOrigin = 1;
+        static constexpr uint32_t kWidth = 2;
+        static constexpr uint32_t kIntr = 3;
+        static constexpr uint32_t kCurrent = 4;
+        static constexpr uint32_t kVSync = 6;
+        static constexpr uint32_t kHSync = 7;
+        static constexpr uint32_t kRegisterCount = 14;
+
+        // The half-line fields of V_SYNC, V_INTR and V_CURRENT, and H_SYNC.
+        static constexpr uint32_t kLineMask = 0x3FF;
+        static constexpr uint32_t kHSyncMask = 0xFFF;
+
+        std::array<uint32_t, kRegisterCount> registers{};
         uint64_t next_interrupt = 0; // When the next vertical interrupt comes.
         uint64_t field_ticks = 0;    // The length of a field.
         uint32_t field = 0;          // The interlaced field: 0 or 1.
@@ -386,13 +406,6 @@ private:
 
     struct Ai
     {
-        uint32_t dram_address = 0;
-        uint32_t length = 0;
-        uint32_t control = 0;
-        uint32_t dac_rate = 0;
-        uint32_t bit_rate = 0;
-
-        // The buffer that plays and the one that waits.
         struct Buffer
         {
             uint32_t address = 0;
@@ -402,6 +415,17 @@ private:
             bool started = false;
             bool from_state = false; // The buffer that a loaded state's AI_LEN describes.
         };
+
+        // AI_STATUS's index.
+        static constexpr uint32_t kStatus = 3;
+
+        uint32_t dram_address = 0;
+        uint32_t length = 0;
+        uint32_t control = 0;
+        uint32_t dac_rate = 0;
+        uint32_t bit_rate = 0;
+
+        // The buffer that plays and the one that waits.
         std::array<Buffer, 2> buffers{};
         int count = 0;
 
@@ -436,7 +460,7 @@ private:
         uint32_t start = 0;
         uint32_t end = 0;
         uint32_t current = 0;
-        uint32_t status = 0x80; // The command buffer is ready.
+        uint32_t status = kDpCommandBufferReady;
         uint32_t clock = 0;
         uint32_t buffer_busy = 0;
         uint32_t pipe_busy = 0;
@@ -484,7 +508,16 @@ private:
         uint32_t current = 0; // The current-control value of the last MODE write.
     };
 
+    static constexpr uint64_t kNever = ~uint64_t{0};
+
+    // The seed of the sequence that decides which bits of an RDRAM read survive a current that is too low.
+    static constexpr uint32_t kRdramNoiseSeed = 0x2545F491;
+
     void Reset();
+
+    // The header's country codes for PAL games.
+    static bool IsPalCountry(uint8_t code);
+
     void RunLate(uint64_t end);
     void ScheduleCountWrap();
     void RecomputeNextEvent();
@@ -492,14 +525,18 @@ private:
     void HandleEvent(Event event);
     void UpdateCpuInterrupt();
     void CatchUpRsp();
-    bool BootWithSeed(uint8_t ipl3_seed, bool version_bit, uint64_t& entry_point);
+    bool BootWithSeed(uint8_t ipl3_seed, uint64_t& entry_point);
 
     // Buses.
     uint32_t ReadRcp32(uint32_t paddr);
     void WriteRcp32(uint32_t paddr, uint32_t value);
     uint32_t ReadCart32(uint32_t paddr);
     void WriteCart32(uint32_t paddr, uint32_t value);
+    void WriteIsViewer(uint32_t offset, uint32_t value);
     uint32_t ReadRom32(uint32_t offset);
+
+    // The word that a store of `size` bytes at `paddr` puts on the 32-bit bus of the RCP and the PI.
+    static uint32_t BusWord(uint32_t paddr, uint64_t value, int size);
 
     // Devices (rcp.cpp).
     uint32_t ReadMi(uint32_t index);
@@ -508,25 +545,53 @@ private:
     void WriteVi(uint32_t index, uint32_t value);
     uint32_t ReadAi(uint32_t index);
     void WriteAi(uint32_t index, uint32_t value);
+
+    // A write of AI_LEN: queues a buffer of `length` bytes at AI_DRAM_ADDR.
+    void QueueAiBuffer(uint32_t length);
+
     uint32_t ReadPi(uint32_t index);
     void WritePi(uint32_t index, uint32_t value);
     uint32_t ReadSi(uint32_t index);
     void WriteSi(uint32_t index, uint32_t value);
+
+    // AI_STATUS, PI_STATUS and SI_STATUS as a save state records them. A read of PI_STATUS adds the IO busy bit.
+    uint32_t AiStatus() const;
+    uint32_t PiStatus() const;
+    uint32_t SiStatus() const;
+
+    // The bytes left now in the AI buffer that plays, rounded down to a multiple of 8. The buffer must not have ended.
+    uint32_t AiBytesLeft(const Ai::Buffer& buffer) const;
+
     uint32_t ReadRi(uint32_t index);
     void WriteRi(uint32_t index, uint32_t value);
+    void WriteDpStatus(uint32_t value);
+    void RunDpCommands();
+
+    // The RDRAM chips (rdram.cpp).
     uint32_t ReadRdramRegister(uint32_t paddr);
     void WriteRdramRegister(uint32_t paddr, uint32_t value);
     RdramChip* SelectRdramChip(uint32_t select);
     void ResetRdramChips(bool configured);
     void UpdateRdramMapping();
+
+    // The chip that answers a mapped RDRAM access at `paddr`. Sets `offset` to the offset of `paddr` in RDRAM. Returns
+    // nullptr when no chip answers.
+    const RdramChip* MappedRdramChip(uint32_t paddr, uint32_t& offset) const;
+
     uint32_t ReadMappedRdram32(uint32_t paddr);
     void WriteMappedRdram(uint32_t paddr, uint64_t value, int size);
     void WriteRdramRepeated(uint32_t paddr, uint64_t value, int size);
     uint32_t ReadRdramChipRegister(const RdramChip& chip, uint32_t index) const;
     void WriteRdramChipRegister(RdramChip& chip, uint32_t index, uint32_t value);
-    void WriteDpStatus(uint32_t value);
-    void RunDpCommands();
-    void WriteIsViewer(uint32_t offset, uint32_t value);
+
+    // MI_MODE's repeat length in bytes.
+    uint32_t MiRepeatLength() const;
+
+    // Save states (save_state.cpp): the CPU with its TLB, and the registers of the RDRAM chips and the RCP.
+    void SaveCpu(uint8_t* state) const;
+    void SaveRcp(uint8_t* state) const;
+    void LoadCpu(const uint8_t* state);
+    void LoadRcp(const uint8_t* state);
 
     // The Aleck64's board (aleck64.cpp).
     void ResetBoard();
@@ -534,14 +599,32 @@ private:
     void WriteBoard(uint32_t paddr, uint64_t value, int size);
     uint32_t ReadBoardInputs(uint32_t paddr);
 
+    // The board's memory that answers `paddr`: the RAM, or the E90's tiles or palette. Sets `offset` to the offset in
+    // it. Returns nullptr for any other address.
+    std::vector<uint8_t>* BoardMemory(uint32_t paddr, uint32_t& offset);
+
     // Timing of the devices, in ticks.
     uint64_t VideoClock() const;
+
+    // The fields a second: 50 for PAL, 60 for NTSC and MPAL.
+    uint64_t FieldRate() const;
+
+    // V_SYNC, or the default of the television system when it's 0.
+    uint64_t VSyncOrDefault() const;
+
+    // The ticks from the start of the field that contains `time` up to `time`. 0 when the field starts later.
+    uint64_t ElapsedInField(uint64_t time) const;
+
     uint64_t FieldTicks() const;
     uint64_t ViInterruptOffset() const;
     bool AiDelay() const;
     bool RcpDelays() const;
     bool LateEvents() const;
     uint64_t LegacyFieldTicksSingle() const;
+
+    // V_SYNC + 1: the half-lines of a field as the legacy timing counts them, with no default for 0.
+    uint64_t LegacyLines() const;
+
     uint64_t AiBufferTicks(uint32_t length) const;
     uint64_t PiTransferTicks(uint32_t cart_address, uint32_t length) const;
     void CopyPiToRdram(uint32_t cart, uint32_t dram, uint32_t length, uint32_t& cart_end, uint32_t& dram_end);
@@ -560,8 +643,8 @@ private:
 
     Options options_;
     uint64_t now_ = 0;
-    std::array<uint64_t, static_cast<int>(Event::kCount)> events_{};
-    std::array<uint64_t, static_cast<int>(Event::kCount)> event_order_{}; // When each event was scheduled.
+    std::array<uint64_t, static_cast<int>(Event::kEventCount)> events_{};
+    std::array<uint64_t, static_cast<int>(Event::kEventCount)> event_order_{}; // When each event was scheduled.
     uint64_t event_serial_ = 0;
     uint64_t next_event_ = kNever;
     bool interrupt_event_ = false;      // Without exact events, an interrupt waits at the front of the queue.
@@ -595,7 +678,7 @@ private:
     uint64_t board_accesses_ = 0;
     std::array<RdramChip, 4> rdram_chips_{};
     uint32_t direct_rdram_size_ = 0;
-    uint32_t rdram_noise_ = 1;
+    uint32_t rdram_noise_ = kRdramNoiseSeed;
     uint64_t rsp_credit_ = 0; // Two RSP cycles for every three ticks: the remainder, in thirds of a cycle.
     uint64_t rsp_clock_ = 0;  // The tick up to which the RSP has run.
 

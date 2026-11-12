@@ -9,36 +9,14 @@
 #include <cstdint>
 #include <vector>
 
+#include "n64/mips_registers.h"
+
 namespace usf::rip::mips
 {
 
-// The general-purpose registers by their O32 names.
-enum Register : uint32_t
-{
-    kZero = 0,
-    kAt = 1,
-    kV0 = 2,
-    kV1 = 3,
-    kA0 = 4,
-    kA1 = 5,
-    kA2 = 6,
-    kA3 = 7,
-    kT0 = 8,
-    kT1 = 9,
-    kT2 = 10,
-    kT3 = 11,
-    kT4 = 12,
-    kT5 = 13,
-    kT6 = 14,
-    kT7 = 15,
-    kS0 = 16,
-    kS1 = 17,
-    kS2 = 18,
-    kT8 = 24,
-    kT9 = 25,
-    kSp = 29,
-    kRa = 31,
-};
+// The general-purpose registers by their O32 names. The core uses the same names.
+using Register = n64::mips::Register;
+using enum n64::mips::Register;
 
 inline constexpr uint32_t kNop = 0;
 
@@ -50,7 +28,6 @@ uint32_t Andi(Register rt, Register rs, uint16_t immediate);
 uint32_t Lbu(Register rt, Register base, uint16_t offset);
 uint32_t Lw(Register rt, Register base, uint16_t offset);
 uint32_t Sw(Register rt, Register base, uint16_t offset);
-uint32_t Sh(Register rt, Register base, uint16_t offset);
 uint32_t Sll(Register rd, Register rt, uint32_t shift);
 uint32_t Srl(Register rd, Register rt, uint32_t shift);
 uint32_t Or(Register rd, Register rs, Register rt);
@@ -60,8 +37,8 @@ uint32_t Sltu(Register rd, Register rs, Register rt);
 uint32_t Jr(Register rs);
 uint32_t Jalr(Register rd, Register rs);
 
-// The upper and lower halves of an address for a LUI and a following load, store or ADDIU, which sign-extend the
-// lower half.
+// The upper and lower halves of an address for a LUI and a following load, store or ADDIU, which sign-extend the lower
+// half.
 uint16_t High(uint32_t address);
 uint16_t Low(uint32_t address);
 

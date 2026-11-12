@@ -14,14 +14,13 @@
 // - Each channel of a song loops separately, through the loop-end command at 0x80038710. At 0x80038724 the channel is
 //   in a0, the loop's level in v0 and its count in a2. A count of 0xFF repeats for ever.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -35,20 +34,10 @@ constexpr uint32_t kDriverAddress = 0x803FF000;
 
 // The numbers that the function at 0x8004B30C accepts. Number 0x50 only fades number 0x28. Numbers 0x5A and 0x5B play
 // numbers 0x02 and 0x01 at other levels. The set leaves those three out.
-constexpr int kSongs[] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12,
-    0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
-    0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
-    0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B};
+constexpr uint32_t kLastSong = 0x4B;
 
 // Each channel of a song loops separately, often at another period. Runs of the songs measured where each channel's
 // second pass ends. The table holds the latest of those ends.
-struct SongLength
-{
-    int number;
-    double seconds;
-};
-
 constexpr SongLength kSongLengths[] = {
     {0x01, 175.1}, {0x02, 111.0}, {0x03, 265.5}, {0x04, 146.2}, {0x05, 196.7}, {0x06, 268.4}, {0x07, 58.1},
     {0x08, 73.7},  {0x09, 82.0},  {0x0A, 22.0},  {0x0B, 199.1}, {0x0C, 137.4}, {0x0D, 203.4}, {0x0E, 230.8},
@@ -60,8 +49,6 @@ constexpr SongLength kSongLengths[] = {
     {0x47, 35.5},  {0x49, 43.8},  {0x4B, 97.8},
 };
 
-constexpr double kFadeSeconds = 10.0;
-
 } // namespace
 
 GameProfile NusNpoeUsaRev2()
@@ -72,7 +59,7 @@ GameProfile NusNpoeUsaRev2()
     profile.sha1 = "0d3b1d740c6ee6da6923550bf24ad827262fd8c0";
     profile.year = "2000";
     profile.cic = n64::Cic::k6103;
-    profile.sound_driver = "Software Creations' music library";
+    profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;
 
     profile.snapshot_address = kFirstState;
@@ -86,24 +73,11 @@ GameProfile NusNpoeUsaRev2()
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 2, .track_register = 4, .count_register = 6});
+        {.address = kLoopEnd, .target_register = mips::kV0, .track_register = mips::kA0, .count_register = mips::kA2});
 
-    for (const int number : kSongs)
+    for (uint32_t number = 0; number <= kLastSong; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[32];
-        std::snprintf(name, sizeof(name), "Song 0x%02X", number);
-        track.name = name;
-        for (const SongLength& length : kSongLengths)
-        {
-            if (length.number == number)
-            {
-                track.length_seconds = length.seconds;
-                track.fade_seconds = kFadeSeconds;
-            }
-        }
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Song", number, TitleBase::kHex), kSongLengths));
     }
 
     return profile;

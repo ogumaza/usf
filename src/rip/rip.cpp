@@ -3,17 +3,19 @@
 #include "rip/rip.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 
 #include "xsflib/bytes.h"
 
+#include "n64/save_state.h"
+#include "n64/system.h"
 #include "rip/length.h"
 #include "rip/player.h"
 #include "usf/usf_file.h"
 
 namespace usf::rip
 {
-
 namespace
 {
 
@@ -41,6 +43,47 @@ std::string TimeText(uint64_t frames, uint32_t rate)
     std::snprintf(text, sizeof(text), "%.3f s", static_cast<double>(frames) / rate);
 
     return text;
+}
+
+// How long a track runs, in milliseconds.
+struct RunSpan
+{
+    uint64_t play_ms = 0; // The length and the fade. The reference covers them.
+    uint64_t end_ms = 0;  // Where the run stops.
+};
+
+// The coverage runs on past the end of the fade: for a looping track, half its length more, at least one pass of its
+// loop; and the margin for every track. The reference ends with the fade.
+RunSpan SpanOf(const std::optional<xsflib::rip::Timing>& timing, const RunSettings& settings)
+{
+    uint64_t play_ms = static_cast<uint64_t>(settings.unknown_length_seconds * kMsPerSecond);
+    uint64_t run_ms = play_ms;
+    if (timing)
+    {
+        play_ms = static_cast<uint64_t>(timing->length_ms + timing->fade_ms);
+        run_ms = play_ms + (timing->fade_ms > 0 ? static_cast<uint64_t>(timing->length_ms) / 2 : 0);
+    }
+
+    run_ms += static_cast<uint64_t>(settings.margin_seconds * kMsPerSecond);
+    const uint64_t end_ms = settings.coverage ? run_ms : settings.reference ? play_ms : 0;
+
+    return {.play_ms = play_ms, .end_ms = end_ms};
+}
+
+// Completes the reference: renders on until `hashes` covers the frames of the first `play_ms` milliseconds, then keeps
+// the hashes of those frames in `run`.
+template <typename OnSamples>
+void FinishReference(MsRenderer& renderer, const OnSamples& on_samples, const SampleHashes& hashes,
+                     const std::vector<uint64_t>& frames_at_ms, uint64_t play_ms, TrackRun& run)
+{
+    run.check_frames = play_ms == 0 ? 0 : frames_at_ms[play_ms - 1];
+    const uint64_t blocks = (run.check_frames + SampleHashes::kBlockFrames - 1) / SampleHashes::kBlockFrames;
+    while (hashes.Blocks().size() < blocks)
+    {
+        on_samples(renderer.Next());
+    }
+
+    run.reference.assign(hashes.Blocks().begin(), hashes.Blocks().begin() + static_cast<std::ptrdiff_t>(blocks));
 }
 
 } // namespace
@@ -88,39 +131,23 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
         run.timing = MeasureTrack(renderer, on_samples);
     }
 
-    // The coverage runs on past the end of the fade: for a looping track, half its length more, at least one pass of
-    // its loop; and the margin for every track. The reference ends with the fade.
-    uint64_t play_ms = static_cast<uint64_t>(settings.unknown_length_seconds * kMsPerSecond);
-    uint64_t run_ms = play_ms;
-    if (run.timing)
-    {
-        play_ms = static_cast<uint64_t>(run.timing->length_ms + run.timing->fade_ms);
-        run_ms = play_ms + (run.timing->fade_ms > 0 ? static_cast<uint64_t>(run.timing->length_ms) / 2 : 0);
-    }
-    run_ms += static_cast<uint64_t>(settings.margin_seconds * kMsPerSecond);
-    const uint64_t end_ms = settings.coverage ? run_ms : settings.reference ? play_ms : 0;
-    while (renderer.Ms() < end_ms)
+    const RunSpan span = SpanOf(run.timing, settings);
+    while (renderer.Ms() < span.end_ms)
     {
         on_samples(renderer.Next());
     }
 
     if (settings.reference)
     {
-        run.check_frames = play_ms == 0 ? 0 : frames_at_ms[play_ms - 1];
-        const uint64_t blocks = (run.check_frames + SampleHashes::kBlockFrames - 1) / SampleHashes::kBlockFrames;
-        while (hashes.Blocks().size() < blocks)
-        {
-            on_samples(renderer.Next());
-        }
-
-        run.reference.assign(hashes.Blocks().begin(), hashes.Blocks().begin() + static_cast<std::ptrdiff_t>(blocks));
+        FinishReference(renderer, on_samples, hashes, frames_at_ms, span.play_ms, run);
     }
 
     run.board_accesses = player.System().BoardAccesses();
+
     if (settings.coverage)
     {
-        run.words = WordsOf(*player.System().GetCoverage(), RomImageSize(snapshot.rom.size()),
-                            xsflib::LoadLe32(snapshot.state.data() + 4));
+        run.words = WordsOf(*player.System().GetCoverage(), n64::RomImageSize(snapshot.rom.size()),
+                            xsflib::LoadLe32(snapshot.state.data() + n64::kStateRdramSizeOffset));
     }
 
     return run;
@@ -164,27 +191,19 @@ std::vector<uint8_t> LibraryFile(const GameProfile& profile, const Sections& lib
     return WriteUsf(library, library_tags);
 }
 
-std::vector<uint8_t> MiniFile(const GameProfile& profile, const Sections& sections, const Track& track, size_t index,
-                              const std::optional<xsflib::rip::Timing>& timing, const std::string& library_name,
-                              const SetTags& tags)
+std::vector<uint8_t> MiniFile(const GameProfile& profile, const Sections& sections, uint32_t number,
+                              const std::string& library_name, const std::string& ripper, xsflib::psf::Tags tags)
 {
-    xsflib::psf::Tags mini_tags = tags.common;
-    mini_tags["_lib"] = library_name;
-    AddFlags(profile, mini_tags);
-    mini_tags["title"] = track.name;
-    mini_tags["track"] = std::to_string(index + 1);
-    if (timing)
-    {
-        mini_tags["length"] = xsflib::psf::FormatTime(timing->length_ms);
-        mini_tags["fade"] = xsflib::psf::FormatTime(timing->fade_ms);
-    }
-    mini_tags["usfrip"] = tags.ripper;
+    tags["_lib"] = library_name;
+    AddFlags(profile, tags);
+    tags["track"] = std::to_string(number);
+    tags["usfrip"] = ripper;
     if (!profile.sound_driver.empty())
     {
-        mini_tags["usfdriver"] = profile.sound_driver;
+        tags["usfdriver"] = profile.sound_driver;
     }
 
-    return WriteUsf(sections, mini_tags);
+    return WriteUsf(sections, tags);
 }
 
 } // namespace usf::rip

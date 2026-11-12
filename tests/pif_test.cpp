@@ -2,12 +2,11 @@
 
 // The PIF's joybus replies for the devices it can connect: the standard controller and the EEPROMs of 4 and 16 Kbit.
 // The expected bytes come from n64brew's pages on the joybus protocol (the command table, the identifiers, the
-// controller's status byte, the diagram of the state reply, the replies without an accessory and the EEPROM's
-// blocks) and on the PIF (the channels and the error flags in the receive-length byte).
+// controller's status byte, the diagram of the state reply, the replies without an accessory and the EEPROM's blocks)
+// and on the PIF (the channels and the error flags in the receive-length byte).
 
 #include "n64/pif.h"
 
-#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -22,16 +21,16 @@ using usf::n64::Pif;
 
 namespace button = usf::n64::button;
 
-// One channel's command in a joybus frame: the bytes to send and the number of bytes to receive. An empty `send`
-// skips the channel with the escape byte 0x00.
+// One channel's command in a joybus frame: the bytes to send and the number of bytes to receive. An empty `send` skips
+// the channel with the escape byte 0x00.
 struct Command
 {
     std::vector<uint8_t> send;
     int receive = 0;
 };
 
-// Writes the frame of `commands`, one for each channel from channel 0, ends it with 0xFE and sets the command byte
-// to configure. Returns the offset of each command's receive-length byte, or -1 for a skipped channel.
+// Writes the frame of `commands`, one for each channel from channel 0, ends it with 0xFE and sets the command byte to
+// configure. Returns the offset of each command's receive-length byte, or -1 for a skipped channel.
 std::vector<int> WriteFrame(Pif& pif, const std::vector<Command>& commands)
 {
     auto& ram = pif.Ram();
@@ -95,8 +94,8 @@ void ControllerInfo()
 
     pif.OnRead(0, 0);
 
-    // Port 1 answers both info commands with the controller's identifier 0x0500 and "no accessory inserted". Port 2
-    // has nothing connected.
+    // Port 1 answers both info commands with the controller's identifier 0x0500 and "no accessory inserted". Port 2 has
+    // nothing connected.
     XSFLIB_CHECK(pif.Ram()[offsets[1]] == 3);
     XSFLIB_CHECK(Reply(pif, offsets[1], 1, 3) == std::vector<uint8_t>({0x05, 0x00, 0x02}));
     XSFLIB_CHECK(pif.Ram()[offsets[2]] == (0x80 | 3));
@@ -114,8 +113,8 @@ void ControllerStateReply()
 
     pif.OnRead(0, 0);
 
-    // The diagram's order: A, B, Z, Start, up, down, left and right from the top bit of the first byte, then RST, a
-    // bit left unused, L, R and the four C buttons. The stick's X and Y follow as two's-complement bytes.
+    // The diagram's order: A, B, Z, Start, up, down, left and right from the top bit of the first byte, then RST, a bit
+    // left unused, L, R and the four C buttons. The stick's X and Y follow as two's-complement bytes.
     XSFLIB_CHECK(pif.Ram()[offsets[0]] == 4);
     XSFLIB_CHECK(Reply(pif, offsets[0], 1, 4) == std::vector<uint8_t>({0x80, 0x01, 0x80, 0x7F}));
     XSFLIB_CHECK(Reply(pif, offsets[1], 1, 4) == std::vector<uint8_t>({0x11, 0x20, 0x05, 0xFF}));

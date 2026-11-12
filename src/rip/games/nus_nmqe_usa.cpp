@@ -25,13 +25,17 @@
 //   list.
 
 #include <cstdio>
+#include <initializer_list>
+#include <vector>
+
+#include "xsflib/bytes.h"
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -40,6 +44,9 @@ constexpr uint32_t kLoadSong = 0x800558D4;
 constexpr uint32_t kPlaySong = 0x80055970;
 constexpr uint32_t kLoopFirstPass = 0x8004EAB8;
 constexpr uint32_t kLoopLaterPass = 0x8004EA68;
+
+// The player that kLoadSong loads the song on, in a1: the first of the engine's two music players.
+constexpr uint32_t kMusicPlayer = 0;
 
 // A track's number holds the song in its low byte and the version above it.
 constexpr int kVersionShift = 8;
@@ -55,9 +62,15 @@ constexpr uint32_t kSetTrackVolumes = 0x80055DDC;
 constexpr uint32_t kSetMixNear = 0x80056044;
 constexpr uint32_t kSetMixFull = 0x80056068;
 
+// The number of the track of `version` of `song`, counting versions from 1.
+constexpr uint32_t Number(uint32_t song, uint32_t version)
+{
+    return ((version - 1) << kVersionShift) | song;
+}
+
 // The track of the third version of song 0x47 has a fixed length. A legacy player stops producing samples before the
 // version's last sound ends, and the length stays short of that point.
-constexpr uint32_t kShortTrack = (2 << kVersionShift) | 0x47;
+constexpr uint32_t kShortTrack = Number(0x47, 3);
 constexpr double kShortTrackSeconds = 2.2;
 
 // Each song's name in the game's sound archive. The change functions take it.
@@ -115,14 +128,9 @@ struct StartEffect
     uint32_t effect;
 };
 
-constexpr uint32_t Number(uint32_t song, uint32_t version)
-{
-    return ((version - 1) << kVersionShift) | song;
-}
-
 // The game gives these no single value, and each one is a choice.
-// - Normal Battle follows any field song. Script starts of field songs set effect 5 most often: 259, to 205 for
-//   effect 1.
+// - Normal Battle follows any field song. Script starts of field songs set effect 5 most often: 259, to 205 for effect
+//   1.
 // - Raphael Raven plays in Deep Jungle, whose first version sets effect 2.
 // - Four versions set their effect in a later phrase, and they start with that effect: 0x70, 0x79, 0x83 and 0x91.
 // - The rest are later versions of a song, which no script starts with a constant. They start with the effect of the
@@ -140,7 +148,7 @@ constexpr StartEffect kStartEffects[] = {
 };
 
 // The second version of this song lists the same phrases as the first.
-constexpr uint32_t kRepeatedVersion = (1 << kVersionShift) | 0x61;
+constexpr uint32_t kRepeatedVersion = Number(0x61, 2);
 
 // The end of RDRAM. A run of the game holds zeros from 0x8038A978 to the end.
 constexpr uint32_t kDriverAddress = 0x803FF000;
@@ -299,6 +307,77 @@ constexpr Song kSongs[] = {
     {0x96, 3, "New Partner (Japanese)"},
 };
 
+// Adds a track for each version of `song`, with the effect that the version starts with.
+void AddVersionTracks(const Song& song, std::vector<Track>& tracks)
+{
+    for (uint32_t version = 0; version < song.versions; version++)
+    {
+        Track track;
+        track.number = Number(song.number, version + 1);
+        if (track.number == kRepeatedVersion)
+        {
+            continue;
+        }
+
+        char name[96];
+        if (version == 0)
+        {
+            std::snprintf(name, sizeof(name), "Song 0x%02X: %s", song.number, song.name);
+        }
+        else
+        {
+            std::snprintf(name, sizeof(name), "Song 0x%02X: %s, version %u", song.number, song.name, version + 1);
+        }
+        track.name = name;
+
+        for (const StartEffect& effect : kStartEffects)
+        {
+            if (effect.number == track.number)
+            {
+                track.rdram_patches.push_back(
+                    {.address = kEffectRequest, .words = {(effect.effect << kEffectShift) | kEffectRequested}});
+            }
+        }
+
+        if (track.number == kShortTrack)
+        {
+            track.length_seconds = kShortTrackSeconds;
+        }
+        tracks.push_back(track);
+    }
+}
+
+// Adds a track for each change of `song`.
+void AddChangeTracks(const Song& song, std::vector<Track>& tracks)
+{
+    for (const Change& change : kChanges)
+    {
+        if (change.song == song.number)
+        {
+            Track track;
+            track.number = (change.change << kChangeShift) | song.number;
+            char name[96];
+            std::snprintf(name, sizeof(name), "Song 0x%02X: %s, %s", song.number, song.name, change.title);
+            track.name = name;
+            tracks.push_back(track);
+        }
+    }
+}
+
+// The bytes of instruction words in the ROM's byte order.
+std::vector<uint8_t> RomBytes(std::initializer_list<uint32_t> words)
+{
+    std::vector<uint8_t> bytes(4 * words.size());
+    size_t offset = 0;
+    for (const uint32_t word : words)
+    {
+        xsflib::StoreBe32(bytes.data() + offset, word);
+        offset += 4;
+    }
+
+    return bytes;
+}
+
 } // namespace
 
 GameProfile NusNmqeUsa()
@@ -314,7 +393,7 @@ GameProfile NusNmqeUsa()
 
     // A return in the function that writes to cartridge space, and the checksums of the ROM with it.
     profile.rom_patches.push_back({.offset = 0x10, .bytes = {0xBD, 0xE3, 0x77, 0x9B, 0x94, 0x92, 0x26, 0xEA}});
-    profile.rom_patches.push_back({.offset = 0x1060, .bytes = {0x03, 0xE0, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00}});
+    profile.rom_patches.push_back({.offset = 0x1060, .bytes = RomBytes({mips::Jr(mips::kRa), mips::kNop})});
 
     profile.snapshot_address = kFirstSongSetup;
     profile.snapshot_hit = 1;
@@ -324,7 +403,7 @@ GameProfile NusNmqeUsa()
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {
-        {.function = kLoadSong, .arguments = {{.track = true, .mask = kSongMask}, {.value = 0}}},
+        {.function = kLoadSong, .arguments = {{.track = true, .mask = kSongMask}, {.value = kMusicPlayer}}},
         {.function = kPlaySong,
          .arguments = {{.result = true}, {.track = true, .right_shift = kVersionShift, .mask = kVersionMask}}}};
     for (const Change& change : kChanges)
@@ -349,59 +428,14 @@ GameProfile NusNmqeUsa()
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopFirstPass, .target_register = 8, .match_register = 5, .match_value = 0});
+        {.address = kLoopFirstPass, .target_register = mips::kT0, .match_register = mips::kA1, .match_value = 0});
     profile.loop_watches.push_back(
-        {.address = kLoopLaterPass, .target_register = 8, .match_register = 2, .match_value = 0});
+        {.address = kLoopLaterPass, .target_register = mips::kT0, .match_register = mips::kV0, .match_value = 0});
 
     for (const Song& song : kSongs)
     {
-        for (uint32_t version = 0; version < song.versions; version++)
-        {
-            Track track;
-            track.number = (version << kVersionShift) | song.number;
-            if (track.number == kRepeatedVersion)
-            {
-                continue;
-            }
-
-            char name[96];
-            if (version == 0)
-            {
-                std::snprintf(name, sizeof(name), "Song 0x%02X: %s", song.number, song.name);
-            }
-            else
-            {
-                std::snprintf(name, sizeof(name), "Song 0x%02X: %s, version %u", song.number, song.name, version + 1);
-            }
-            track.name = name;
-
-            for (const StartEffect& effect : kStartEffects)
-            {
-                if (effect.number == track.number)
-                {
-                    track.rdram_patches.push_back(
-                        {.address = kEffectRequest, .words = {(effect.effect << kEffectShift) | kEffectRequested}});
-                }
-            }
-            if (track.number == kShortTrack)
-            {
-                track.length_seconds = kShortTrackSeconds;
-            }
-            profile.tracks.push_back(track);
-        }
-
-        for (const Change& change : kChanges)
-        {
-            if (change.song == song.number)
-            {
-                Track track;
-                track.number = (change.change << kChangeShift) | song.number;
-                char name[96];
-                std::snprintf(name, sizeof(name), "Song 0x%02X: %s, %s", song.number, song.name, change.title);
-                track.name = name;
-                profile.tracks.push_back(track);
-            }
-        }
+        AddVersionTracks(song, profile.tracks);
+        AddChangeTracks(song, profile.tracks);
     }
 
     return profile;

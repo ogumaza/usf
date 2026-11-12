@@ -6,13 +6,18 @@
 
 #include "xsflib/bytes.h"
 
+#include "n64/mips_registers.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
+
+// SP_STATUS's write bits that have no partner: clear broke, and the clear and set bits of the SP interrupt.
+constexpr uint32_t kSpWriteClearBroke = 1u << 2;
+constexpr uint32_t kSpWriteClearInterrupt = 1u << 3;
+constexpr uint32_t kSpWriteSetInterrupt = 1u << 4;
 
 int32_t SignExtend16(uint32_t value)
 {
@@ -25,6 +30,31 @@ int32_t VectorOffset(uint32_t instruction)
     const int32_t offset = static_cast<int32_t>(instruction & 0x7F);
     return offset >= 0x40 ? offset - 0x80 : offset;
 }
+
+// The fields of a vector load or store, and the value of its base register.
+struct VectorAccess
+{
+    VectorAccess(uint32_t instruction, const std::array<uint32_t, 32>& gpr)
+        : vt(static_cast<int>((instruction >> 16) & 31)),
+          kind((instruction >> 11) & 31),
+          e(static_cast<int>((instruction >> 7) & 15)),
+          base(gpr[(instruction >> 21) & 31]),
+          offset(VectorOffset(instruction))
+    {
+    }
+
+    // The address of an access whose offset counts in units of `scale` bytes.
+    uint32_t Address(int scale) const
+    {
+        return base + static_cast<uint32_t>(offset * scale);
+    }
+
+    int vt;
+    uint32_t kind;
+    int e;
+    uint32_t base;
+    int32_t offset;
+};
 
 } // namespace
 
@@ -43,7 +73,7 @@ void Rsp::Reset()
     semaphore_ = 0;
     ibist_ = 0;
     current_ = {};
-    current_.length = 0xFF8;
+    current_.length = kDmaLengthMask;
     pending_ = {};
     busy_ = false;
     full_ = false;
@@ -55,29 +85,24 @@ bool Rsp::Halted() const
     return (status_ & kSpStatusHalt) != 0;
 }
 
-std::array<uint8_t, 0x1000>& Rsp::Dmem()
+Rsp::SpMemory& Rsp::Dmem()
 {
     return dmem_;
 }
 
-std::array<uint8_t, 0x1000>& Rsp::Imem()
+Rsp::SpMemory& Rsp::Imem()
 {
     return imem_;
 }
 
-const std::array<uint8_t, 0x1000>& Rsp::Dmem() const
+const Rsp::SpMemory& Rsp::Dmem() const
 {
     return dmem_;
 }
 
-const std::array<uint8_t, 0x1000>& Rsp::Imem() const
+const Rsp::SpMemory& Rsp::Imem() const
 {
     return imem_;
-}
-
-VectorUnit& Rsp::Vector()
-{
-    return vu_;
 }
 
 uint32_t Rsp::Gpr(int index) const
@@ -133,18 +158,29 @@ uint64_t Rsp::Run(uint64_t cycles)
 
 uint8_t Rsp::Read8(uint32_t address) const
 {
-    return dmem_[address & 0xFFF];
+    return dmem_[address & kAddressMask];
 }
 
 void Rsp::Write8(uint32_t address, uint8_t value)
 {
-    dmem_[address & 0xFFF] = value;
+    dmem_[address & kAddressMask] = value;
+}
+
+uint32_t Rsp::Read16(uint32_t address) const
+{
+    return (static_cast<uint32_t>(Read8(address)) << 8) | Read8(address + 1);
+}
+
+void Rsp::Write16(uint32_t address, uint32_t value)
+{
+    Write8(address, static_cast<uint8_t>(value >> 8));
+    Write8(address + 1, static_cast<uint8_t>(value));
 }
 
 uint32_t Rsp::Read32(uint32_t address) const
 {
-    const uint32_t start = address & 0xFFF;
-    if (start <= 0xFFC)
+    const uint32_t start = address & kAddressMask;
+    if (start <= kSpMemSize - 4)
     {
         return xsflib::LoadBe32(dmem_.data() + start);
     }
@@ -155,8 +191,8 @@ uint32_t Rsp::Read32(uint32_t address) const
 
 void Rsp::Write32(uint32_t address, uint32_t value)
 {
-    const uint32_t start = address & 0xFFF;
-    if (start <= 0xFFC)
+    const uint32_t start = address & kAddressMask;
+    if (start <= kSpMemSize - 4)
     {
         xsflib::StoreBe32(dmem_.data() + start, value);
         return;
@@ -171,8 +207,9 @@ void Rsp::Write32(uint32_t address, uint32_t value)
 void Rsp::LoadBytes(int vt, int first, int end, uint32_t address)
 {
     // Whole lanes that don't wrap go together.
-    const uint32_t start = address & 0xFFF;
-    if (((first | end) & 1) == 0 && first < end && end <= 16 && start + static_cast<uint32_t>(end - first) <= 0x1000)
+    const uint32_t start = address & kAddressMask;
+    if (((first | end) & 1) == 0 && first < end && end <= 16 &&
+        start + static_cast<uint32_t>(end - first) <= kSpMemSize)
     {
         const uint8_t* bytes = dmem_.data() + start;
         for (int lane = first / 2; lane < end / 2; lane++)
@@ -193,8 +230,9 @@ void Rsp::LoadBytes(int vt, int first, int end, uint32_t address)
 void Rsp::StoreBytes(int vt, int first, int end, uint32_t address)
 {
     // Whole lanes that don't wrap go together.
-    const uint32_t start = address & 0xFFF;
-    if (((first | end) & 1) == 0 && first < end && end <= 16 && start + static_cast<uint32_t>(end - first) <= 0x1000)
+    const uint32_t start = address & kAddressMask;
+    if (((first | end) & 1) == 0 && first < end && end <= 16 &&
+        start + static_cast<uint32_t>(end - first) <= kSpMemSize)
     {
         uint8_t* bytes = dmem_.data() + start;
         for (int lane = first / 2; lane < end / 2; lane++)
@@ -223,16 +261,21 @@ void Rsp::Step()
     }
 
     pc_ = next_pc_;
-    next_pc_ = (next_pc_ + 4) & 0xFFC;
+    next_pc_ = (next_pc_ + 4) & kWordAddressMask;
     Execute(decoded);
     gpr_[0] = 0;
+}
+
+uint32_t Rsp::Link() const
+{
+    return (pc_ + 4) & kWordAddressMask;
 }
 
 void Rsp::Branch(bool taken, uint32_t target)
 {
     if (taken)
     {
-        next_pc_ = target & 0xFFC;
+        next_pc_ = target & kWordAddressMask;
     }
 }
 
@@ -269,91 +312,24 @@ Rsp::Decoded Rsp::Decode(uint32_t instruction)
     const auto set_jump = [&decoded, instruction](Op op)
     {
         decoded.op = op;
-        decoded.immediate = (instruction & 0x3FF) << 2;
+        decoded.immediate = (instruction << 2) & kWordAddressMask;
     };
 
     switch (instruction >> 26)
     {
     case 0x00:
-        switch (instruction & 0x3F)
-        {
-        case 0x00:
-            set(Op::kSll);
-            break;
-        case 0x02:
-            set(Op::kSrl);
-            break;
-        case 0x03:
-            set(Op::kSra);
-            break;
-        case 0x04:
-            set(Op::kSllv);
-            break;
-        case 0x06:
-            set(Op::kSrlv);
-            break;
-        case 0x07:
-            set(Op::kSrav);
-            break;
-        case 0x08:
-            set(Op::kJr);
-            break;
-        case 0x09:
-            set(Op::kJalr);
-            break;
-        case 0x0D:
-            set(Op::kBreak);
-            break;
-        case 0x20:
-        case 0x21:
-            set(Op::kAdd);
-            break;
-        case 0x22:
-        case 0x23:
-            set(Op::kSub);
-            break;
-        case 0x24:
-            set(Op::kAnd);
-            break;
-        case 0x25:
-            set(Op::kOr);
-            break;
-        case 0x26:
-            set(Op::kXor);
-            break;
-        case 0x27:
-            set(Op::kNor);
-            break;
-        case 0x2A:
-            set(Op::kSlt);
-            break;
-        case 0x2B:
-            set(Op::kSltu);
-            break;
-        default:
-            break;
-        }
+        set(SpecialOp(instruction & 0x3F));
         break;
 
     case 0x01:
-        switch (decoded.rt)
         {
-        case 0x00:
-            set_branch(Op::kBltz);
-            break;
-        case 0x01:
-            set_branch(Op::kBgez);
-            break;
-        case 0x10:
-            set_branch(Op::kBltzal);
-            break;
-        case 0x11:
-            set_branch(Op::kBgezal);
-            break;
-        default:
+            const Op op = RegimmOp(decoded.rt);
+            if (op != Op::kNone)
+            {
+                set_branch(op);
+            }
             break;
         }
-        break;
 
     case 0x02:
         set_jump(Op::kJ);
@@ -423,23 +399,7 @@ Rsp::Decoded Rsp::Decode(uint32_t instruction)
 
         // The COP2 moves name a byte of the register in bits 7 to 10.
         decoded.sa = static_cast<uint8_t>((instruction >> 7) & 15);
-        switch (decoded.rs)
-        {
-        case 0x00:
-            set(Op::kMfc2);
-            break;
-        case 0x02:
-            set(Op::kCfc2);
-            break;
-        case 0x04:
-            set(Op::kMtc2);
-            break;
-        case 0x06:
-            set(Op::kCtc2);
-            break;
-        default:
-            break;
-        }
+        set(Cop2MoveOp(decoded.rs));
         break;
 
     case 0x20:
@@ -490,6 +450,85 @@ Rsp::Decoded Rsp::Decode(uint32_t instruction)
     return decoded;
 }
 
+Rsp::Op Rsp::SpecialOp(uint32_t funct)
+{
+    switch (funct)
+    {
+    case 0x00:
+        return Op::kSll;
+    case 0x02:
+        return Op::kSrl;
+    case 0x03:
+        return Op::kSra;
+    case 0x04:
+        return Op::kSllv;
+    case 0x06:
+        return Op::kSrlv;
+    case 0x07:
+        return Op::kSrav;
+    case 0x08:
+        return Op::kJr;
+    case 0x09:
+        return Op::kJalr;
+    case 0x0D:
+        return Op::kBreak;
+    case 0x20:
+    case 0x21:
+        return Op::kAdd;
+    case 0x22:
+    case 0x23:
+        return Op::kSub;
+    case 0x24:
+        return Op::kAnd;
+    case 0x25:
+        return Op::kOr;
+    case 0x26:
+        return Op::kXor;
+    case 0x27:
+        return Op::kNor;
+    case 0x2A:
+        return Op::kSlt;
+    case 0x2B:
+        return Op::kSltu;
+    default:
+        return Op::kNone;
+    }
+}
+
+Rsp::Op Rsp::RegimmOp(uint32_t rt)
+{
+    switch (rt)
+    {
+    case 0x00:
+        return Op::kBltz;
+    case 0x01:
+        return Op::kBgez;
+    case 0x10:
+        return Op::kBltzal;
+    case 0x11:
+        return Op::kBgezal;
+    default:
+        return Op::kNone;
+    }
+}
+
+Rsp::Op Rsp::Cop2MoveOp(uint32_t rs)
+{
+    switch (rs)
+    {
+    case 0x00:
+        return Op::kMfc2;
+    case 0x02:
+        return Op::kCfc2;
+    case 0x04:
+        return Op::kMtc2;
+    case 0x06:
+        return Op::kCtc2;
+    default:
+        return Op::kNone;
+    }
+}
+
 void Rsp::Execute(const Decoded& instruction)
 {
     const uint32_t rs = instruction.rs;
@@ -530,7 +569,7 @@ void Rsp::Execute(const Decoded& instruction)
 
     case Op::kJalr:
         Branch(true, gpr_[rs]);
-        gpr_[rd] = (pc_ + 4) & 0xFFC;
+        gpr_[rd] = Link();
         break;
 
     case Op::kBreak:
@@ -581,12 +620,12 @@ void Rsp::Execute(const Decoded& instruction)
 
     case Op::kBltzal:
         Branch(static_cast<int32_t>(gpr_[rs]) < 0, pc_ + immediate);
-        gpr_[31] = (pc_ + 4) & 0xFFC;
+        gpr_[mips::kRa] = Link();
         break;
 
     case Op::kBgezal:
         Branch(static_cast<int32_t>(gpr_[rs]) >= 0, pc_ + immediate);
-        gpr_[31] = (pc_ + 4) & 0xFFC;
+        gpr_[mips::kRa] = Link();
         break;
 
     case Op::kJ:
@@ -595,7 +634,7 @@ void Rsp::Execute(const Decoded& instruction)
 
     case Op::kJal:
         Branch(true, immediate);
-        gpr_[31] = (pc_ + 4) & 0xFFC;
+        gpr_[mips::kRa] = Link();
         break;
 
     case Op::kBeq:
@@ -674,6 +713,7 @@ void Rsp::Execute(const Decoded& instruction)
         break;
 
     case Op::kVector:
+        // A vector instruction's vd, vs, vt and element are the sa, rd, rt and rs fields.
         instruction.vector(vu_, instruction.sa, static_cast<int>(rd), static_cast<int>(rt), static_cast<int>(rs));
         break;
 
@@ -682,11 +722,8 @@ void Rsp::Execute(const Decoded& instruction)
         break;
 
     case Op::kLh:
-        {
-            const uint32_t address = gpr_[rs] + immediate;
-            gpr_[rt] = static_cast<uint32_t>(SignExtend16((Read8(address) << 8) | Read8(address + 1)));
-            break;
-        }
+        gpr_[rt] = static_cast<uint32_t>(SignExtend16(Read16(gpr_[rs] + immediate)));
+        break;
 
     case Op::kLw:
         gpr_[rt] = Read32(gpr_[rs] + immediate);
@@ -697,23 +734,16 @@ void Rsp::Execute(const Decoded& instruction)
         break;
 
     case Op::kLhu:
-        {
-            const uint32_t address = gpr_[rs] + immediate;
-            gpr_[rt] = (static_cast<uint32_t>(Read8(address)) << 8) | Read8(address + 1);
-            break;
-        }
+        gpr_[rt] = Read16(gpr_[rs] + immediate);
+        break;
 
     case Op::kSb:
         Write8(gpr_[rs] + immediate, static_cast<uint8_t>(gpr_[rt]));
         break;
 
     case Op::kSh:
-        {
-            const uint32_t address = gpr_[rs] + immediate;
-            Write8(address, static_cast<uint8_t>(gpr_[rt] >> 8));
-            Write8(address + 1, static_cast<uint8_t>(gpr_[rt]));
-            break;
-        }
+        Write16(gpr_[rs] + immediate, gpr_[rt]);
+        break;
 
     case Op::kSw:
         Write32(gpr_[rs] + immediate, gpr_[rt]);
@@ -775,14 +805,14 @@ uint32_t Rsp::ReadRegister(uint32_t index)
     switch (index & 7)
     {
     case 0:
-        return current_.mem_address & 0x1FF8;
+        return current_.mem_address & kDmaSpAddressMask;
 
     case 1:
-        return current_.dram_address & 0xFFFFF8;
+        return current_.dram_address & kDmaRdramAddressMask;
 
     case 2:
     case 3:
-        return (current_.length & 0xFF8) | (current_.count << 12) | (current_.skip << 20);
+        return current_.LengthRegister();
 
     case 4:
         return Status();
@@ -808,10 +838,10 @@ void Rsp::WriteRegister(uint32_t index, uint32_t value)
     switch (index & 7)
     {
     case 0:
-        pending_.mem_address = value & 0x1FF8;
+        pending_.mem_address = value & kDmaSpAddressMask;
         break;
     case 1:
-        pending_.dram_address = value & 0xFFFFF8;
+        pending_.dram_address = value & kDmaRdramAddressMask;
         break;
     case 2:
         QueueDma(value, false);
@@ -834,7 +864,8 @@ void Rsp::WriteStatus(uint32_t value)
 {
     const uint32_t old_status = status_;
 
-    auto apply = [this, value](int clear_bit, int set_bit, uint32_t flag)
+    // Halt, single step, interrupt on break and each signal have a clear bit and the set bit above it.
+    const auto apply = [this, value](int clear_bit, int set_bit, uint32_t flag)
     {
         const bool clear = ((value >> clear_bit) & 1) != 0;
         const bool set = ((value >> set_bit) & 1) != 0;
@@ -849,13 +880,13 @@ void Rsp::WriteStatus(uint32_t value)
     };
 
     apply(0, 1, kSpStatusHalt);
-    if ((value & (1u << 2)) != 0)
+    if ((value & kSpWriteClearBroke) != 0)
     {
         status_ &= ~kSpStatusBroke;
     }
 
-    const bool clear_interrupt = (value & (1u << 3)) != 0;
-    const bool set_interrupt = (value & (1u << 4)) != 0;
+    const bool clear_interrupt = (value & kSpWriteClearInterrupt) != 0;
+    const bool set_interrupt = (value & kSpWriteSetInterrupt) != 0;
     if (clear_interrupt && !set_interrupt)
     {
         system_.LowerMi(kMiInterruptSp);
@@ -877,13 +908,13 @@ void Rsp::WriteStatus(uint32_t value)
 
 uint32_t Rsp::ReadPc() const
 {
-    return pc_ & 0xFFC;
+    return pc_ & kWordAddressMask;
 }
 
 void Rsp::WritePc(uint32_t value)
 {
-    pc_ = value & 0xFFC;
-    next_pc_ = (pc_ + 4) & 0xFFC;
+    pc_ = value & kWordAddressMask;
+    next_pc_ = (pc_ + 4) & kWordAddressMask;
 }
 
 uint32_t Rsp::ReadIbist() const
@@ -896,11 +927,21 @@ void Rsp::WriteIbist(uint32_t value)
     ibist_ = value & 7;
 }
 
+uint32_t Rsp::Dma::LengthRegister() const
+{
+    return (length & kDmaLengthMask) | (count << kDmaCountShift) | (skip << kDmaSkipShift);
+}
+
+void Rsp::Dma::SetLengthRegister(uint32_t value)
+{
+    length = value & kDmaLengthMask;
+    count = (value >> kDmaCountShift) & kDmaCountMask;
+    skip = (value >> kDmaSkipShift) & kDmaLengthMask;
+}
+
 void Rsp::QueueDma(uint32_t length_register, bool to_rdram)
 {
-    pending_.length = length_register & 0xFF8;
-    pending_.count = (length_register >> 12) & 0xFF;
-    pending_.skip = (length_register >> 20) & 0xFF8;
+    pending_.SetLengthRegister(length_register);
     pending_.to_rdram = to_rdram;
     full_ = true;
 
@@ -941,9 +982,9 @@ void Rsp::FinishDma()
 
     // Each row copies (length + 8) bytes in 8-byte units. SP memory addresses wrap within DMEM or IMEM, and the RDRAM
     // address skips `skip` bytes between rows. PeterLemon's SP DMA tests show no skip after the last row.
-    std::array<uint8_t, 0x1000>& memory = (current_.mem_address & 0x1000) != 0 ? imem_ : dmem_;
-    uint32_t mem = current_.mem_address & 0xFF8;
-    uint32_t dram = current_.dram_address & 0xFFFFF8;
+    SpMemory& memory = Memory(current_.mem_address);
+    uint32_t mem = current_.mem_address & kDmaLengthMask;
+    uint32_t dram = current_.dram_address & kDmaRdramAddressMask;
     for (uint32_t row = 0; row <= current_.count; row++)
     {
         for (uint32_t i = 0; i <= current_.length; i += 8)
@@ -953,7 +994,7 @@ void Rsp::FinishDma()
             {
                 for (uint32_t b = 0; b < 8; b++)
                 {
-                    bytes[b] = memory[(mem + b) & 0xFFF];
+                    bytes[b] = memory[(mem + b) & kAddressMask];
                 }
                 system_.DmaWriteRdram(dram, bytes.data(), 8);
             }
@@ -962,24 +1003,24 @@ void Rsp::FinishDma()
                 system_.DmaReadRdram(dram, bytes.data(), 8);
                 for (uint32_t b = 0; b < 8; b++)
                 {
-                    memory[(mem + b) & 0xFFF] = bytes[b];
+                    memory[(mem + b) & kAddressMask] = bytes[b];
                 }
             }
 
-            mem = (mem + 8) & 0xFF8;
-            dram = (dram + 8) & 0xFFFFF8;
+            mem = (mem + 8) & kDmaLengthMask;
+            dram = (dram + 8) & kDmaRdramAddressMask;
         }
 
         if (row < current_.count)
         {
-            dram = (dram + current_.skip) & 0xFFFFF8;
+            dram = (dram + current_.skip) & kDmaRdramAddressMask;
         }
     }
 
     // The registers read back where the transfer ended, with a length of 0xFF8 and a count of 0.
-    current_.mem_address = (current_.mem_address & 0x1000) | mem;
+    current_.mem_address = (current_.mem_address & kImemBit) | mem;
     current_.dram_address = dram;
-    current_.length = 0xFF8;
+    current_.length = kDmaLengthMask;
     current_.count = 0;
     busy_ = false;
 
@@ -992,15 +1033,15 @@ void Rsp::FinishDma()
 SpRegisters Rsp::Registers() const
 {
     SpRegisters registers;
-    registers.mem_address = current_.mem_address & 0x1FF8;
-    registers.dram_address = current_.dram_address & 0xFFFFF8;
-    registers.read_length = (current_.length & 0xFF8) | (current_.count << 12) | (current_.skip << 20);
+    registers.mem_address = current_.mem_address & kDmaSpAddressMask;
+    registers.dram_address = current_.dram_address & kDmaRdramAddressMask;
+    registers.read_length = current_.LengthRegister();
     registers.write_length = registers.read_length;
     registers.status = Status();
     registers.dma_full = full_ ? 1 : 0;
     registers.dma_busy = busy_ ? 1 : 0;
     registers.semaphore = semaphore_;
-    registers.pc = pc_ & 0xFFC;
+    registers.pc = pc_ & kWordAddressMask;
     registers.ibist = ibist_;
 
     return registers;
@@ -1009,11 +1050,9 @@ SpRegisters Rsp::Registers() const
 void Rsp::SetRegisters(const SpRegisters& registers)
 {
     current_ = {};
-    current_.mem_address = registers.mem_address & 0x1FF8;
-    current_.dram_address = registers.dram_address & 0xFFFFF8;
-    current_.length = registers.read_length & 0xFF8;
-    current_.count = (registers.read_length >> 12) & 0xFF;
-    current_.skip = (registers.read_length >> 20) & 0xFF8;
+    current_.mem_address = registers.mem_address & kDmaSpAddressMask;
+    current_.dram_address = registers.dram_address & kDmaRdramAddressMask;
+    current_.SetLengthRegister(registers.read_length);
     pending_ = current_;
     status_ = registers.status & ~(kSpStatusDmaBusy | kSpStatusDmaFull | kSpStatusIoFull);
     busy_ = false;
@@ -1025,21 +1064,14 @@ void Rsp::SetRegisters(const SpRegisters& registers)
 
 void Rsp::LoadVector(uint32_t instruction)
 {
-    const uint32_t base = (instruction >> 21) & 31;
-    const int vt = static_cast<int>((instruction >> 16) & 31);
-    const uint32_t kind = (instruction >> 11) & 31;
-    const int e = static_cast<int>((instruction >> 7) & 15);
-    const int32_t offset = VectorOffset(instruction);
-    auto address_for = [this, base, offset](int scale)
-    {
-        return gpr_[base] + static_cast<uint32_t>(offset * scale);
-    };
-
-    switch (kind)
+    const VectorAccess access(instruction, gpr_);
+    const int vt = access.vt;
+    const int e = access.e;
+    switch (access.kind)
     {
     case 0x00:
         // LBV.
-        vu_.SetByte(vt, e, Read8(address_for(1)));
+        vu_.SetByte(vt, e, Read8(access.Address(1)));
         break;
 
     case 0x01:
@@ -1047,15 +1079,15 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x03:
         {
             // LSV, LLV and LDV: 2, 4 or 8 bytes from byte e, stopping at the end of the register.
-            const int size = 1 << kind;
-            LoadBytes(vt, e, std::min(e + size, 16), address_for(size));
+            const int size = 1 << access.kind;
+            LoadBytes(vt, e, std::min(e + size, 16), access.Address(size));
             break;
         }
 
     case 0x04:
         {
             // LQV: up to the next 16-byte boundary of DMEM.
-            const uint32_t address = address_for(16);
+            const uint32_t address = access.Address(16);
             LoadBytes(vt, e, std::min(16 + e - static_cast<int>(address & 15), 16), address);
             break;
         }
@@ -1063,7 +1095,7 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x05:
         {
             // LRV: from the 16-byte boundary below the address up to it, into the end of the register.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int start = 16 - (static_cast<int>(address & 15) - e);
             LoadBytes(vt, start, 16, address & ~15u);
             break;
@@ -1073,10 +1105,10 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x07:
         {
             // LPV and LUV: eight bytes into the high bits of the lanes, packed or unsigned.
-            uint32_t address = address_for(8);
+            uint32_t address = access.Address(8);
             const int index = static_cast<int>(address & 7) - e;
             address &= ~7u;
-            const int shift = kind == 0x06 ? 8 : 7;
+            const int shift = access.kind == 0x06 ? 8 : 7;
             for (int lane = 0; lane < 8; lane++)
             {
                 const uint32_t byte = Read8(address + static_cast<uint32_t>((index + lane) & 15));
@@ -1088,7 +1120,7 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x08:
         {
             // LHV: every other byte.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int index = static_cast<int>(address & 7) - e;
             address &= ~7u;
             for (int lane = 0; lane < 8; lane++)
@@ -1102,7 +1134,7 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x09:
         {
             // LFV: every fourth byte into four lanes, as eight bytes from byte e.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int index = static_cast<int>(address & 7) - e;
             address &= ~7u;
             std::array<uint16_t, 8> lanes;
@@ -1125,7 +1157,7 @@ void Rsp::LoadVector(uint32_t instruction)
     case 0x0B:
         {
             // LTV: a transpose. Each of eight registers gets one lane, rotating with the element.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const uint32_t begin = address & ~7u;
             address = begin + ((static_cast<uint32_t>(e) + (address & 8)) & 15);
             const int vt_base = vt & ~7;
@@ -1157,21 +1189,14 @@ void Rsp::LoadVector(uint32_t instruction)
 
 void Rsp::StoreVector(uint32_t instruction)
 {
-    const uint32_t base = (instruction >> 21) & 31;
-    const int vt = static_cast<int>((instruction >> 16) & 31);
-    const uint32_t kind = (instruction >> 11) & 31;
-    const int e = static_cast<int>((instruction >> 7) & 15);
-    const int32_t offset = VectorOffset(instruction);
-    auto address_for = [this, base, offset](int scale)
-    {
-        return gpr_[base] + static_cast<uint32_t>(offset * scale);
-    };
-
-    switch (kind)
+    const VectorAccess access(instruction, gpr_);
+    const int vt = access.vt;
+    const int e = access.e;
+    switch (access.kind)
     {
     case 0x00:
         // SBV.
-        Write8(address_for(1), vu_.Byte(vt, e));
+        Write8(access.Address(1), vu_.Byte(vt, e));
         break;
 
     case 0x01:
@@ -1179,15 +1204,15 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x03:
         {
             // SSV, SLV and SDV wrap within the register.
-            const int size = 1 << kind;
-            StoreBytes(vt, e, e + size, address_for(size));
+            const int size = 1 << access.kind;
+            StoreBytes(vt, e, e + size, access.Address(size));
             break;
         }
 
     case 0x04:
         {
             // SQV: up to the next 16-byte boundary.
-            const uint32_t address = address_for(16);
+            const uint32_t address = access.Address(16);
             StoreBytes(vt, e, e + (16 - static_cast<int>(address & 15)), address);
             break;
         }
@@ -1195,7 +1220,7 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x05:
         {
             // SRV: from the 16-byte boundary below the address up to it.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int end = e + static_cast<int>(address & 15);
             const int shift = 16 - static_cast<int>(address & 15);
             address &= ~15u;
@@ -1211,8 +1236,8 @@ void Rsp::StoreVector(uint32_t instruction)
         {
             // SPV and SUV: the high byte of each lane, packed or unsigned. Past byte 8 of the register each swaps to
             // the other's form.
-            uint32_t address = address_for(8);
-            const bool packed = kind == 0x06;
+            uint32_t address = access.Address(8);
+            const bool packed = access.kind == 0x06;
             for (int index = e; index < e + 8; index++)
             {
                 const bool first_half = (index & 15) < 8;
@@ -1234,7 +1259,7 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x08:
         {
             // SHV: every other byte, from bits 14 to 7 of each lane.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int index = static_cast<int>(address & 7);
             address &= ~7u;
             for (int i = 0; i < 8; i++)
@@ -1250,7 +1275,7 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x09:
         {
             // SFV: every fourth byte, from four lanes that the element picks. Other elements store zeros.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const uint32_t index = address & 7;
             address &= ~7u;
             std::array<int, 4> lanes = {-1, -1, -1, -1};
@@ -1293,7 +1318,7 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x0A:
         {
             // SWV: the register rotated by the element, within the 8-byte-aligned block.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             uint32_t position = address & 7;
             address &= ~7u;
             for (int index = e; index < e + 16; index++)
@@ -1306,7 +1331,7 @@ void Rsp::StoreVector(uint32_t instruction)
     case 0x0B:
         {
             // STV: a transpose. Each of eight registers gives one lane.
-            uint32_t address = address_for(16);
+            uint32_t address = access.Address(16);
             const int start = vt & ~7;
             int byte = 16 - (e & ~1);
             uint32_t position = (address & 7) - static_cast<uint32_t>(e & ~1);

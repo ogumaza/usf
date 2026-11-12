@@ -72,10 +72,6 @@ public:
     // The frames rendered since Start.
     uint64_t Position() const;
 
-    // Moves to `frame` of the stream. Going back restarts the track, and going on renders up to `frame`. Returns false
-    // after an error.
-    bool Seek(uint64_t frame);
-
 private:
     friend Base;
 
@@ -105,7 +101,6 @@ private:
     std::vector<RateChange> rates_; // The rate of the next frame, then any changes after it.
     OutputClock clock_;
     uint32_t silence_rate_ = 0;
-    std::vector<int16_t> scratch_;
 };
 
 } // namespace usf

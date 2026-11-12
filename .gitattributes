@@ -1,3 +1,2 @@
-# Text files are stored with LF line endings, and Python scripts are checked out with LF everywhere.
+# Text files are stored with LF line endings.
 * text=auto
-*.py text eol=lf

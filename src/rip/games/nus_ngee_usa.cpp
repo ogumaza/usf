@@ -21,10 +21,11 @@
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -103,21 +104,13 @@ constexpr std::array<const char*, 63> kTitles = {
 // A sequence's tracks loop separately, and some of them repeat a short figure for ever. The length analysis counts the
 // first track that loops, which ends these songs too soon. Runs that printed every track's jumps give their lengths:
 // the longest track's first jump and one more pass.
-struct SongLength
-{
-    uint32_t index;
-    double seconds;
-};
-
 constexpr SongLength kSongLengths[] = {
-    {.index = 0x08, .seconds = 264.0}, {.index = 0x0B, .seconds = 270.3}, {.index = 0x0D, .seconds = 265.5},
-    {.index = 0x18, .seconds = 72.0},  {.index = 0x1A, .seconds = 499.6}, {.index = 0x1C, .seconds = 307.2},
-    {.index = 0x22, .seconds = 109.8}, {.index = 0x29, .seconds = 122.9}, {.index = 0x2A, .seconds = 109.8},
-    {.index = 0x2B, .seconds = 93.6},  {.index = 0x2C, .seconds = 94.2},  {.index = 0x2E, .seconds = 112.0},
-    {.index = 0x2F, .seconds = 111.3}, {.index = 0x32, .seconds = 299.6}, {.index = 0x37, .seconds = 476.4},
+    {.number = 0x08, .seconds = 264.0}, {.number = 0x0B, .seconds = 270.3}, {.number = 0x0D, .seconds = 265.5},
+    {.number = 0x18, .seconds = 72.0},  {.number = 0x1A, .seconds = 499.6}, {.number = 0x1C, .seconds = 307.2},
+    {.number = 0x22, .seconds = 109.8}, {.number = 0x29, .seconds = 122.9}, {.number = 0x2A, .seconds = 109.8},
+    {.number = 0x2B, .seconds = 93.6},  {.number = 0x2C, .seconds = 94.2},  {.number = 0x2E, .seconds = 112.0},
+    {.number = 0x2F, .seconds = 111.3}, {.number = 0x32, .seconds = 299.6}, {.number = 0x37, .seconds = 476.4},
 };
-
-constexpr double kFadeSeconds = 10.0;
 
 } // namespace
 
@@ -129,7 +122,7 @@ GameProfile NusNgeeUsa()
     profile.sha1 = "abe01e4aeb033b6c0836819f549c791b26cfde83";
     profile.year = "1997";
     profile.cic = n64::Cic::k6102;
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
     profile.eeprom = n64::EepromType::k4Kbit;
 
@@ -146,7 +139,7 @@ GameProfile NusNgeeUsa()
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopJump, .target_register = 25, .track_register = 11, .count_register = 4});
+        {.address = kLoopJump, .target_register = mips::kT9, .track_register = mips::kT3, .count_register = mips::kA0});
 
     // Entries 0x14, 0x1E and 0x27 play nothing. The set leaves them out.
     for (uint32_t index = 1; index < kTitles.size(); index++)
@@ -156,20 +149,9 @@ GameProfile NusNgeeUsa()
             continue;
         }
 
-        Track track;
-        track.number = index;
         char name[64];
         std::snprintf(name, sizeof(name), "Sequence 0x%02X: %s", index, kTitles[index]);
-        track.name = name;
-        for (const SongLength& length : kSongLengths)
-        {
-            if (length.index == index)
-            {
-                track.length_seconds = length.seconds;
-                track.fade_seconds = kFadeSeconds;
-            }
-        }
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(index, name, kSongLengths));
     }
 
     return profile;

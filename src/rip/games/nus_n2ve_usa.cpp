@@ -18,13 +18,12 @@
 //   loop at 0x800CF48C, with the new read pointer in t7 and the track in t3. The other, with its store at 0x800E8C4C,
 //   plays nothing here.
 
-#include <cstdio>
-
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -38,20 +37,13 @@ constexpr uint32_t kSongRequest = 0x80169088;
 constexpr uint32_t kGameThread = 0x80102B98;
 constexpr uint32_t kLoopJump = 0x800CF48C;
 
-constexpr int kSequences = 24;
+constexpr uint32_t kSequences = 24;
 
-const char* TrackName(int index)
-{
-    switch (index)
-    {
-    case 0x0D:
-        return "Sequence 0x0D: after the logos";
-    case 0x10:
-        return "Sequence 0x10: menus";
-    default:
-        return nullptr;
-    }
-}
+// The titles of the tracks that have a name.
+constexpr NamedNumber kTitles[] = {
+    {0x0D, "Sequence 0x0D: after the logos"},
+    {0x10, "Sequence 0x10: menus"},
+};
 
 } // namespace
 
@@ -63,7 +55,7 @@ GameProfile NusN2veUsa()
     profile.sha1 = "9fa379d66b218228da3cbf386c91d857c677f489";
     profile.year = "1999";
     profile.cic = n64::Cic::k6102;
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
     // No song plays before a press of A, so the snapshot comes in the audio thread during the first screens. The game
@@ -79,17 +71,11 @@ GameProfile NusN2veUsa()
     profile.rdram_patches = {{.address = kPlayerFlags, .words = {2}}};
     profile.stop_threads = {kGameThread};
 
-    profile.loop_watches.push_back({.address = kLoopJump, .target_register = 15, .track_register = 11});
+    profile.loop_watches.push_back({.address = kLoopJump, .target_register = mips::kT7, .track_register = mips::kT3});
 
-    for (int index = 0; index < kSequences; index++)
+    for (uint32_t index = 0; index < kSequences; index++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(index);
-        const char* name = TrackName(index);
-        char fallback[32];
-        std::snprintf(fallback, sizeof(fallback), "Sequence 0x%02X", index);
-        track.name = name != nullptr ? name : fallback;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Sequence", TitleBase::kHex));
     }
 
     return profile;

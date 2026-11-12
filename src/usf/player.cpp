@@ -2,19 +2,10 @@
 
 #include "usf/player.h"
 
-#include <algorithm>
 #include <span>
-#include <utility>
 
 namespace usf
 {
-
-namespace
-{
-
-constexpr std::size_t kSeekBlockFrames = 4096;
-
-} // namespace
 
 std::optional<std::string> Player::LoadFile(const std::string& path, const xsflib::psf::FileReader& reader,
                                             LoadedUsf& set)
@@ -61,26 +52,6 @@ uint32_t Player::SampleRate()
 uint64_t Player::Position() const
 {
     return (dropped_ + consumed_) / 2;
-}
-
-bool Player::Seek(uint64_t frame)
-{
-    if (frame < Position() && !Start())
-    {
-        return false;
-    }
-
-    scratch_.resize(kSeekBlockFrames * 2);
-    while (Position() < frame)
-    {
-        const uint64_t left = frame - Position();
-        if (Render(scratch_.data(), static_cast<std::size_t>(std::min<uint64_t>(left, kSeekBlockFrames))) == 0)
-        {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 void Player::Unload()

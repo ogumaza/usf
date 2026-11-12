@@ -13,14 +13,13 @@
 // - The compressed sequence reader at 0x80028DA4 stores a loop's jump at 0x80028F34. The new read pointer is in t5, the
 //   track's slot in a0 and the loop's count in a1.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -31,20 +30,14 @@ constexpr uint32_t kLoopJump = 0x80028F34;
 // it draws nothing after the snapshot.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
-constexpr int kSongs = 37;
+constexpr uint32_t kSongs = 37;
 
 // The code of the Cave course selects this song. It holds no notes that sound.
-constexpr int kSilentSong = 0x16;
+constexpr uint32_t kSilentSong = 0x16;
 
 // Each track of a song loops separately, often at another period. The length model follows the first track to loop, and
 // nested loops keep it from counting two passes of some tracks. Runs of the songs measured where each track's second
 // pass ends. The table holds the latest of those ends.
-struct SongLength
-{
-    int number;
-    double seconds;
-};
-
 constexpr SongLength kSongLengths[] = {
     {0x00, 188.8}, {0x04, 50.9},  {0x05, 155.0}, {0x06, 174.4}, {0x07, 145.1}, {0x08, 85.8}, {0x09, 93.0},
     {0x0A, 87.3},  {0x0C, 81.3},  {0x0D, 164.1}, {0x0E, 137.8}, {0x0F, 116.1}, {0x10, 79.9}, {0x12, 33.2},
@@ -52,78 +45,40 @@ constexpr SongLength kSongLengths[] = {
     {0x1C, 19.1},  {0x1D, 142.3}, {0x1E, 116.1}, {0x22, 132.0},
 };
 
-constexpr double kFadeSeconds = 10.0;
-
-const char* Title(int index)
-{
-    switch (index)
-    {
-    case 0x00:
-        return "Song 0x00: Beach";
-    case 0x01:
-        return "Song 0x01: Poké Flute, first song";
-    case 0x02:
-        return "Song 0x02: Poké Flute, third song";
-    case 0x03:
-        return "Song 0x03: Poké Flute, second song";
-    case 0x04:
-        return "Song 0x04: Tunnel";
-    case 0x05:
-        return "Song 0x05: River";
-    case 0x06:
-        return "Song 0x06: Volcano";
-    case 0x07:
-        return "Song 0x07: Valley";
-    case 0x0B:
-        return "Song 0x0B: staff roll";
-    case 0x0C:
-        return "Song 0x0C: new game";
-    case 0x0D:
-        return "Song 0x0D: Cave";
-    case 0x0E:
-        return "Song 0x0E: Rainbow Cloud";
-    case 0x0F:
-        return "Song 0x0F: Cave, ambience";
-    case 0x10:
-        return "Song 0x10: photo check";
-    case 0x11:
-        return "Song 0x11: course finished";
-    case 0x12:
-        return "Song 0x12: Professor Oak's report, part 1";
-    case 0x14:
-        return "Song 0x14: River and title screen, ambience";
-    case 0x15:
-        return "Song 0x15: River, ambience";
-    case 0x17:
-        return "Song 0x17: main menu";
-    case 0x18:
-        return "Song 0x18: Cave, second ambience";
-    case 0x19:
-        return "Song 0x19: title screen";
-    case 0x1B:
-        return "Song 0x1B: menu";
-    case 0x1C:
-        return "Song 0x1C: Mew";
-    case 0x1D:
-        return "Song 0x1D: Professor Oak's report, part 2";
-    case 0x1E:
-        return "Song 0x1E: Professor Oak's report, part 3";
-    case 0x1F:
-        return "Song 0x1F: photo check, ambience";
-    case 0x20:
-        return "Song 0x20: Valley and Professor Oak's lab, ambience";
-    case 0x21:
-        return "Song 0x21: Tunnel, ambience";
-    case 0x22:
-        return "Song 0x22: gallery";
-    case 0x23:
-        return "Song 0x23: main menu, ambience";
-    case 0x24:
-        return "Song 0x24: staff roll, second part";
-    default:
-        return nullptr;
-    }
-}
+// The titles of the tracks that have a name.
+constexpr NamedNumber kTitles[] = {
+    {0x00, "Song 0x00: Beach"},
+    {0x01, "Song 0x01: Poké Flute, first song"},
+    {0x02, "Song 0x02: Poké Flute, third song"},
+    {0x03, "Song 0x03: Poké Flute, second song"},
+    {0x04, "Song 0x04: Tunnel"},
+    {0x05, "Song 0x05: River"},
+    {0x06, "Song 0x06: Volcano"},
+    {0x07, "Song 0x07: Valley"},
+    {0x0B, "Song 0x0B: staff roll"},
+    {0x0C, "Song 0x0C: new game"},
+    {0x0D, "Song 0x0D: Cave"},
+    {0x0E, "Song 0x0E: Rainbow Cloud"},
+    {0x0F, "Song 0x0F: Cave, ambience"},
+    {0x10, "Song 0x10: photo check"},
+    {0x11, "Song 0x11: course finished"},
+    {0x12, "Song 0x12: Professor Oak's report, part 1"},
+    {0x14, "Song 0x14: River and title screen, ambience"},
+    {0x15, "Song 0x15: River, ambience"},
+    {0x17, "Song 0x17: main menu"},
+    {0x18, "Song 0x18: Cave, second ambience"},
+    {0x19, "Song 0x19: title screen"},
+    {0x1B, "Song 0x1B: menu"},
+    {0x1C, "Song 0x1C: Mew"},
+    {0x1D, "Song 0x1D: Professor Oak's report, part 2"},
+    {0x1E, "Song 0x1E: Professor Oak's report, part 3"},
+    {0x1F, "Song 0x1F: photo check, ambience"},
+    {0x20, "Song 0x20: Valley and Professor Oak's lab, ambience"},
+    {0x21, "Song 0x21: Tunnel, ambience"},
+    {0x22, "Song 0x22: gallery"},
+    {0x23, "Song 0x23: main menu, ambience"},
+    {0x24, "Song 0x24: staff roll, second part"},
+};
 
 } // namespace
 
@@ -135,7 +90,7 @@ GameProfile NusNpfeUsa()
     profile.sha1 = "edc7c49cc568c045fe48be0d18011c30f393cbaf";
     profile.year = "1999";
     profile.cic = n64::Cic::k6103;
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
     profile.snapshot_address = kPlaySong;
@@ -150,30 +105,16 @@ GameProfile NusNpfeUsa()
 
     // The players' tracks jump back separately. The slot's address in a0 tells them apart.
     profile.loop_watches.push_back(
-        {.address = kLoopJump, .target_register = 13, .track_register = 4, .count_register = 5});
+        {.address = kLoopJump, .target_register = mips::kT5, .track_register = mips::kA0, .count_register = mips::kA1});
 
-    for (int index = 0; index < kSongs; index++)
+    for (uint32_t index = 0; index < kSongs; index++)
     {
         if (index == kSilentSong)
         {
             continue;
         }
 
-        Track track;
-        track.number = static_cast<uint32_t>(index);
-        const char* name = Title(index);
-        char fallback[32];
-        std::snprintf(fallback, sizeof(fallback), "Song 0x%02X", index);
-        track.name = name != nullptr ? name : fallback;
-        for (const SongLength& length : kSongLengths)
-        {
-            if (length.number == index)
-            {
-                track.length_seconds = length.seconds;
-                track.fade_seconds = kFadeSeconds;
-            }
-        }
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Song", TitleBase::kHex, kSongLengths));
     }
 
     return profile;

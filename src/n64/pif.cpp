@@ -7,11 +7,10 @@
 
 namespace usf::n64
 {
-
 namespace
 {
 
-constexpr int kCommandByte = 63;
+constexpr int kCommandByte = static_cast<int>(kPifRamSize) - 1;
 constexpr uint8_t kCommandConfigure = 0x01;
 constexpr uint8_t kCommandChallenge = 0x02;
 constexpr uint8_t kCommandTerminateBoot = 0x08;
@@ -20,8 +19,7 @@ constexpr uint8_t kCommandAcquireChecksum = 0x20;
 constexpr uint8_t kCommandRunChecksum = 0x40;
 constexpr uint8_t kCommandAcknowledge = 0x80;
 
-constexpr int kChannels = 5;
-constexpr int kCartridgeChannel = 4;
+constexpr int kCartridgeChannel = Pif::kPorts;
 
 // The error flags that the PIF writes into a command's receive-length byte.
 constexpr uint8_t kNoDevice = 0x80;
@@ -81,12 +79,12 @@ void Pif::Reset()
     next_input_ = 0;
 }
 
-std::array<uint8_t, 64>& Pif::Ram()
+std::array<uint8_t, kPifRamSize>& Pif::Ram()
 {
     return ram_;
 }
 
-const std::array<uint8_t, 64>& Pif::Ram() const
+const std::array<uint8_t, kPifRamSize>& Pif::Ram() const
 {
     return ram_;
 }
@@ -95,12 +93,6 @@ void Pif::ConnectController(int port, bool connected)
 {
     CheckPort(port);
     connected_[port] = connected;
-}
-
-bool Pif::ControllerConnected(int port) const
-{
-    CheckPort(port);
-    return connected_[port];
 }
 
 void Pif::SetController(int port, const ControllerState& state)
@@ -112,6 +104,7 @@ void Pif::SetController(int port, const ControllerState& state)
 const ControllerState& Pif::Controller(int port) const
 {
     CheckPort(port);
+
     return controllers_[port];
 }
 
@@ -119,12 +112,6 @@ void Pif::AddInput(const InputEvent& event)
 {
     CheckPort(event.port);
     script_.push_back(event);
-}
-
-void Pif::ClearInput()
-{
-    script_.clear();
-    next_input_ = 0;
 }
 
 void Pif::SetEeprom(EepromType type)
@@ -174,21 +161,10 @@ void Pif::OnWrite()
     }
 
     // The boot-time commands: the PIF acts on them and clears them. The checksum that IPL2 sends is always accepted.
-    if ((command & kCommandTerminateBoot) != 0)
-    {
-        command &= static_cast<uint8_t>(~kCommandTerminateBoot);
-    }
-    if ((command & kCommandLockRom) != 0)
-    {
-        command &= static_cast<uint8_t>(~kCommandLockRom);
-    }
+    command &= static_cast<uint8_t>(~(kCommandTerminateBoot | kCommandLockRom | kCommandRunChecksum));
     if ((command & kCommandAcquireChecksum) != 0)
     {
         command = static_cast<uint8_t>((command & ~kCommandAcquireChecksum) | kCommandAcknowledge);
-    }
-    if ((command & kCommandRunChecksum) != 0)
-    {
-        command &= static_cast<uint8_t>(~kCommandRunChecksum);
     }
 }
 
@@ -286,8 +262,16 @@ void Pif::RunJoybus()
 
         const int send_length = send & 0x3F;
         const int receive_length = ram_[offset + 1] & 0x3F;
+
+        // A program may have changed the lengths since the last configuration. The channel is skipped when its command
+        // and reply no longer fit before the command byte.
+        if (offset + 2 + send_length + receive_length > kCommandByte)
+        {
+            continue;
+        }
+
         const std::span<const uint8_t> command(ram_.data() + offset + 2, static_cast<size_t>(send_length));
-        std::array<uint8_t, 64> reply{};
+        std::array<uint8_t, kPifRamSize> reply{};
         bool present = false;
         int replied = -1;
         if (channel == kCartridgeChannel)

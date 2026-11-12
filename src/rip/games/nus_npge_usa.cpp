@@ -8,8 +8,8 @@
 //
 // - The game thread selects the cue bank in the function at 0x8000BD70. The audio engine is running by then. The
 //   snapshot takes over the game thread at the next instruction, 0x8000BED0.
-// - The title screen sets the sequences' volume with the function at 0x8002006C and starts its song at full level.
-//   The function at 0x80023244 starts a cue the same way.
+// - The title screen sets the sequences' volume with the function at 0x8002006C and starts its song at full level. The
+//   function at 0x80023244 starts a cue the same way.
 // - The sequence reader's loop end is at 0x80005664. A sequence is one stream of MIDI events, with one loop.
 // - From the end of the sequence's fifth pass, the reader leaves out a choice of channels 8 to 15, made from the CPU's
 //   count register, in two passes of every three. A mini ends after its second pass and a fade. It never gets there.
@@ -37,10 +37,10 @@
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -49,7 +49,7 @@ constexpr uint32_t kSetCategoryVolume = 0x8002006C;
 constexpr uint32_t kPlayCue = 0x80023244;
 constexpr uint32_t kLoopEnd = 0x80005664;
 
-constexpr uint32_t kSequences = 2;
+constexpr uint32_t kSequenceCategory = 2;
 constexpr uint32_t kFullVolume = 0x7FFF;
 
 // The end of RDRAM. A run of the game holds zeros there.
@@ -85,34 +85,27 @@ constexpr SlowCue kSlowCues[] = {
     {24, kVisitLimitRate}, // Picnic: Ochre deep and Ochre entrance.
 };
 
-// lui $1, the upper half of `value`, for the addiu that follows.
-constexpr uint32_t LoadUpper(uint32_t value)
-{
-    return 0x3C010000 | (((value + 0x8000) >> 16) & 0xFFFF);
-}
-
-// addiu $1, $1, the lower half of `value`.
-constexpr uint32_t AddLower(uint32_t value)
-{
-    return 0x24210000 | (value & 0xFFFF);
-}
-
 // The sequence start loads 1.0 into two FPU registers and stores them at offset 0x450 of the sequence's state. These
 // words store `rate` with $1 instead, in the same instructions' places. They replace the call of an empty function
 // after the store and the saving and reloading of $a0 around it.
 std::vector<RdramPatch> StartRatePatches(double rate)
 {
-    constexpr uint32_t kStoreHigh = 0xAC810450; // sw $1, 0x450($a0)
-    constexpr uint32_t kStoreLow = 0xAC810454;  // sw $1, 0x454($a0)
-    constexpr uint32_t kNop = 0;
+    // The addresses of the patches: the LUI, ADDIU and SW of the high word, and the four words of the low word.
+    constexpr uint32_t kHighLui = 0x80005260;
+    constexpr uint32_t kHighAddiu = 0x8000526C;
+    constexpr uint32_t kHighSw = 0x8000527C;
+    constexpr uint32_t kLowWords = 0x80005290;
+    constexpr uint16_t kRateOffset = 0x450;
 
     const auto bits = std::bit_cast<uint64_t>(rate);
     const auto high = static_cast<uint32_t>(bits >> 32);
     const auto low = static_cast<uint32_t>(bits);
-    return {{.address = 0x80005260, .words = {LoadUpper(high)}},
-            {.address = 0x8000526C, .words = {AddLower(high)}},
-            {.address = 0x8000527C, .words = {kStoreHigh}},
-            {.address = 0x80005290, .words = {LoadUpper(low), AddLower(low), kStoreLow, kNop}}};
+    return {{.address = kHighLui, .words = {mips::Lui(mips::kAt, mips::High(high))}},
+            {.address = kHighAddiu, .words = {mips::Addiu(mips::kAt, mips::kAt, mips::Low(high))}},
+            {.address = kHighSw, .words = {mips::Sw(mips::kAt, mips::kA0, kRateOffset)}},
+            {.address = kLowWords,
+             .words = {mips::Lui(mips::kAt, mips::High(low)), mips::Addiu(mips::kAt, mips::kAt, mips::Low(low)),
+                       mips::Sw(mips::kAt, mips::kA0, kRateOffset + 4), mips::kNop}}};
 }
 
 } // namespace
@@ -135,7 +128,7 @@ GameProfile NusNpgeUsa()
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {
-        {.function = kSetCategoryVolume, .arguments = {{.value = kSequences}, {.value = kFullVolume}}},
+        {.function = kSetCategoryVolume, .arguments = {{.value = kSequenceCategory}, {.value = kFullVolume}}},
         {.function = kPlayCue, .arguments = {{.track = true}}}};
     profile.driver = BuildCallDriver(driver);
 

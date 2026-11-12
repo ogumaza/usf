@@ -7,14 +7,14 @@
 
 namespace usf::rip
 {
-
 namespace
 {
 
 constexpr uint64_t kMsPerSecond = 1000;
 
-// The adapter that MeasureLength plays (see xsflib/rip/length.h). It follows the output alone. It sees no voices and
-// no sequence player, so the sequence is always busy and never steady.
+// The adapter that MeasureLength plays (see xsflib/rip/length.h). It follows the output alone. It sees no voices and no
+// sequence player, so the sequence is always busy and never steady. It leaves out the tests from Ringing to
+// ActiveChannels. MeasureLength then takes the answers of a model that follows only its output.
 //
 // A sequence player may loop each of its tracks separately. libultra's compressed sequence player is one. Each track
 // that loops then jumps back once a pass. The jumps of one pass come one after another. MeasureLength would start its
@@ -46,8 +46,8 @@ public:
         return true;
     }
 
-    // Whether every track other than `track` that has looped since the first sound has played its loop
-    // kLengthLoops times.
+    // Whether every track other than `track` that has looped since the first sound has played its loop kLengthLoops
+    // times.
     bool OthersLooped(int track) const
     {
         for (const auto& [other, passes] : passes_)
@@ -66,61 +66,6 @@ public:
         return sounded_;
     }
 
-    bool Ringing() const
-    {
-        return false;
-    }
-
-    std::size_t VoiceCount() const
-    {
-        return 0;
-    }
-
-    xsflib::rip::VoicePlace Voice(std::size_t) const
-    {
-        return {};
-    }
-
-    bool Active() const
-    {
-        return false;
-    }
-
-    bool Settled() const
-    {
-        return false;
-    }
-
-    bool Stuck() const
-    {
-        return false;
-    }
-
-    bool Moving() const
-    {
-        return false;
-    }
-
-    uint64_t ChangedAt() const
-    {
-        return 0;
-    }
-
-    bool Busy() const
-    {
-        return true;
-    }
-
-    bool ChannelsChanging() const
-    {
-        return false;
-    }
-
-    int ActiveChannels() const
-    {
-        return 0;
-    }
-
     template <typename F>
     void OnLoop(F on_loop)
     {
@@ -128,8 +73,8 @@ public:
     }
 
 private:
-    // A track's loop and the passes it has made since the first sound. A track that moves on to another loop starts
-    // its count again.
+    // A track's loop and the passes it has made since the first sound. A track that moves on to another loop starts its
+    // count again.
     struct Passes
     {
         uint32_t target = 0;
@@ -162,10 +107,12 @@ private:
     std::function<void(int, uint32_t)> on_loop_;
     bool sounded_ = false;
     bool heard_ = false; // Whether an earlier frame sounded.
+
     // The track whose loops MeasureLength counts, once has_lead_ is set. A track register can hold any value, such as a
     // channel's address in KSEG0. No track number can therefore mark a missing lead.
     int lead_ = 0;
     bool has_lead_ = false;
+
     std::map<int, Passes> passes_;
 };
 
@@ -175,8 +122,8 @@ xsflib::rip::LengthRules GameLengthRules()
 {
     xsflib::rip::LengthRules rules;
     rules.frame_ms = 1.0;
-    rules.max_ms = 600'000.0;
-    rules.max_frames = 600'000;
+    rules.max_ms = kMaxTrackSeconds * static_cast<double>(kMsPerSecond);
+    rules.max_frames = static_cast<uint64_t>(rules.max_ms / rules.frame_ms);
     rules.silent_frames = 180'000;
     rules.fade_ms = 10'000.0;
     rules.tail_ms = 500.0;

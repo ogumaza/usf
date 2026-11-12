@@ -6,6 +6,7 @@
 #include "usf/usf_file.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <string>
@@ -13,8 +14,11 @@
 
 #include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
+#include "xsflib/testing/sets.h"
 
+#include "n64/save_state.h"
 #include "n64/system.h"
+#include "test_programs.h"
 #include "usf/track.h"
 
 namespace
@@ -23,29 +27,15 @@ namespace
 using usf::Chunk;
 using usf::LoadedUsf;
 using usf::Sections;
+using usf::n64::kRdramSize4;
+using usf::n64::kRdramSize8;
+using usf::n64::kStateRdramOffset;
+using usf::testing::kStateA0;
 using xsflib::psf::Tags;
+using xsflib::testing::ExactReader;
 
 // Files in memory, by path.
-struct Files
-{
-    std::map<std::string, std::vector<uint8_t>> files;
-
-    xsflib::psf::FileReader Reader() const
-    {
-        return [this](const std::string& path, std::vector<uint8_t>& data)
-        {
-            const auto it = files.find(path);
-            if (it == files.end())
-            {
-                return false;
-            }
-
-            data = it->second;
-
-            return true;
-        };
-    }
-};
+using Files = std::map<std::string, std::vector<uint8_t>>;
 
 std::vector<uint8_t> Bytes(std::initializer_list<int> values)
 {
@@ -61,10 +51,10 @@ std::vector<uint8_t> Bytes(std::initializer_list<int> values)
 // A state image of 4 MiB with the identifier and the RDRAM size, and a recognisable byte.
 std::vector<uint8_t> MinimalState()
 {
-    std::vector<uint8_t> state(usf::kStateOverhead + 0x400000, 0);
-    xsflib::StoreLe32(state.data(), 0x23D8A6C8);
-    xsflib::StoreLe32(state.data() + 4, 0x400000);
-    state[0x75C + 0x100] = 0x42;
+    std::vector<uint8_t> state(usf::kStateOverhead + kRdramSize4, 0);
+    xsflib::StoreLe32(state.data(), usf::n64::kStateId);
+    xsflib::StoreLe32(state.data() + 4, kRdramSize4);
+    state[kStateRdramOffset + 0x100] = 0x42;
 
     return state;
 }
@@ -88,8 +78,6 @@ void Layout()
     sections.state = std::vector<Chunk>{{0x4, Bytes({0xAA})}};
     const Tags tags = {{"_lib", "set.usflib"}, {"title", "A"}};
 
-    const std::vector<uint8_t> file = usf::WriteUsf(sections, tags);
-
     // The header: the signature, version 0x21, the reserved area's size, no program and a CRC of 0.
     const std::vector<uint8_t> reserved =
         Bytes({'S', 'R', '6', '4', 4,   0, 0, 0, 0x10, 0, 0, 0, 1, 2,    3, 4, 0, 0, 0,
@@ -99,12 +87,21 @@ void Layout()
     expected.insert(expected.end(), reserved.begin(), reserved.end());
     const std::string tag_text = "[TAG]_lib=set.usflib\ntitle=A\n";
     expected.insert(expected.end(), tag_text.begin(), tag_text.end());
-    XSFLIB_CHECK(file == expected);
 
-    // An absent section is 4 zero bytes. A file with only a state starts with them and then SR64.
+    const std::vector<uint8_t> file = usf::WriteUsf(sections, tags);
+
+    XSFLIB_CHECK(file == expected);
+}
+
+// An absent section is 4 zero bytes. A file with only a state starts with them and then SR64.
+void AbsentSection()
+{
     Sections state_only;
     state_only.state = std::vector<Chunk>{};
-    XSFLIB_CHECK(usf::WriteReservedArea(state_only) == Bytes({0, 0, 0, 0, 'S', 'R', '6', '4', 0, 0, 0, 0}));
+
+    const std::vector<uint8_t> reserved = usf::WriteReservedArea(state_only);
+
+    XSFLIB_CHECK(reserved == Bytes({0, 0, 0, 0, 'S', 'R', '6', '4', 0, 0, 0, 0}));
 }
 
 void ParseReserved()
@@ -116,9 +113,9 @@ void ParseReserved()
     Sections parsed;
     const auto error = usf::ParseReservedArea(reserved, parsed);
 
-    XSFLIB_CHECK(!error);
-    XSFLIB_CHECK(parsed.rom && parsed.rom->size() == 2 && (*parsed.rom)[1].offset == 0x100);
-    XSFLIB_CHECK(parsed.rom && (*parsed.rom)[1].data == Bytes({7, 8}));
+    XSFLIB_REQUIRE(!error && parsed.rom && parsed.rom->size() == 2);
+    XSFLIB_CHECK((*parsed.rom)[1].offset == 0x100);
+    XSFLIB_CHECK((*parsed.rom)[1].data == Bytes({7, 8}));
     XSFLIB_CHECK(!parsed.state);
 }
 
@@ -126,12 +123,11 @@ void ParseReserved()
 void RoundTrip()
 {
     usf::n64::System system;
-    std::vector<uint8_t> rom(0x1000);
-    for (size_t i = 0; i < rom.size(); i++)
+    std::vector<uint8_t> rom = usf::testing::TestRom(0x1000);
+    for (size_t i = 4; i < rom.size(); i++)
     {
         rom[i] = static_cast<uint8_t>(i * 7 + 3);
     }
-    xsflib::StoreBe32(rom.data(), 0x80371240);
 
     system.LoadRom(rom);
     system.GetCpu().SetGpr(4, 0x1234);
@@ -141,32 +137,29 @@ void RoundTrip()
     // The library holds the ROM in LE word order and the whole state. The mini changes a0 and one ROM byte.
     Sections library;
     std::vector<uint8_t> le(rom.size());
-    for (size_t i = 0; i < rom.size(); i++)
-    {
-        le[i] = rom[i ^ 3];
-    }
+    usf::n64::CopyToLeWords(rom.data(), le.data(), rom.size());
     library.rom = std::vector<Chunk>{{0, le}};
     library.state = std::vector<Chunk>{{0, state}};
     Sections mini;
     mini.rom = std::vector<Chunk>{{0x800 ^ 3, Bytes({0x5A})}};
     std::vector<uint8_t> a0(8, 0);
     xsflib::StoreLe64(a0.data(), 7);
-    mini.state = std::vector<Chunk>{{0x070, a0}};
+    mini.state = std::vector<Chunk>{{kStateA0, a0}};
 
     Files files;
-    files.files["dir/set.usflib"] = usf::WriteUsf(library, {{"_enablecompare", "1"}});
-    files.files["dir/a.miniusf"] =
+    files["dir/set.usflib"] = usf::WriteUsf(library, {{"_enablecompare", "1"}});
+    files["dir/a.miniusf"] =
         usf::WriteUsf(mini, {{"_lib", "set.usflib"}, {"_enableFIFOfull", "1"}, {"title", "Track A"}});
-
-    LoadedUsf loaded;
-    const auto error = usf::LoadUsf("dir/a.miniusf", files.Reader(), loaded);
-
-    XSFLIB_CHECK(!error);
     std::vector<uint8_t> expected_rom = rom;
     expected_rom[0x800] = 0x5A;
-    XSFLIB_CHECK(loaded.rom == expected_rom);
     std::vector<uint8_t> expected_state = state;
-    xsflib::StoreLe64(expected_state.data() + 0x070, 7);
+    xsflib::StoreLe64(expected_state.data() + kStateA0, 7);
+
+    LoadedUsf loaded;
+    const auto error = usf::LoadUsf("dir/a.miniusf", ExactReader(files), loaded);
+
+    XSFLIB_CHECK(!error);
+    XSFLIB_CHECK(loaded.rom == expected_rom);
     XSFLIB_CHECK(loaded.state == expected_state);
     XSFLIB_CHECK(loaded.enable_compare && loaded.enable_fifo_full);
     XSFLIB_CHECK(loaded.tags.count("title") == 1 && loaded.tags.count("_enablecompare") == 0);
@@ -180,35 +173,58 @@ void ChainOrder()
     Sections base;
     base.state = std::vector<Chunk>{{0, state}};
     Sections mine;
-    mine.state = std::vector<Chunk>{{0x75C + 0x200, Bytes({1})}, {0x75C + 0x204, Bytes({1})}};
+    mine.state = std::vector<Chunk>{{kStateRdramOffset + 0x200, Bytes({1})}, {kStateRdramOffset + 0x204, Bytes({1})}};
     Sections second;
-    second.state = std::vector<Chunk>{{0x75C + 0x204, Bytes({2})}};
+    second.state = std::vector<Chunk>{{kStateRdramOffset + 0x204, Bytes({2})}};
 
     Files files;
-    files.files["base.usflib"] = usf::WriteUsf(base, {});
-    files.files["second.usflib"] = usf::WriteUsf(second, {});
-    files.files["track.miniusf"] =
+    files["base.usflib"] = usf::WriteUsf(base, {});
+    files["second.usflib"] = usf::WriteUsf(second, {});
+    files["track.miniusf"] =
         usf::WriteUsf(mine, {{"_lib", "base.usflib"}, {"_lib2", "second.usflib"}, {"_enablecompare", ""}});
 
     LoadedUsf loaded;
-    const auto error = usf::LoadUsf("track.miniusf", files.Reader(), loaded);
+    const auto error = usf::LoadUsf("track.miniusf", ExactReader(files), loaded);
 
-    XSFLIB_CHECK(!error);
-    XSFLIB_CHECK(loaded.state[0x75C + 0x200] == 1);
-    XSFLIB_CHECK(loaded.state[0x75C + 0x204] == 2);
-    XSFLIB_CHECK(loaded.state[0x75C + 0x100] == 0x42);
+    XSFLIB_REQUIRE(!error && loaded.state.size() == usf::kStateOverhead + kRdramSize4);
+    XSFLIB_CHECK(loaded.state[kStateRdramOffset + 0x200] == 1);
+    XSFLIB_CHECK(loaded.state[kStateRdramOffset + 0x204] == 2);
+    XSFLIB_CHECK(loaded.state[kStateRdramOffset + 0x100] == 0x42);
     XSFLIB_CHECK(!loaded.enable_compare);
-    XSFLIB_CHECK(loaded.state.size() == usf::kStateOverhead + 0x400000);
+}
+
+// An empty _lib2 names no library. Neither does an empty _lib. The loader then reads _lib3.
+void EmptyLibTags()
+{
+    Sections base;
+    base.state = std::vector<Chunk>{{0, MinimalState()}};
+    Sections mine;
+    mine.state = std::vector<Chunk>{{kStateRdramOffset + 0x200, Bytes({1})}};
+    Sections third;
+    third.state = std::vector<Chunk>{{kStateRdramOffset + 0x204, Bytes({3})}};
+
+    Files files;
+    files["base.usflib"] = usf::WriteUsf(base, {{"_lib", ""}});
+    files["third.usflib"] = usf::WriteUsf(third, {});
+    files["track.miniusf"] = usf::WriteUsf(mine, {{"_lib", "base.usflib"}, {"_lib2", ""}, {"_lib3", "third.usflib"}});
+
+    LoadedUsf loaded;
+    const auto error = usf::LoadUsf("track.miniusf", ExactReader(files), loaded);
+
+    XSFLIB_REQUIRE(!error && loaded.state.size() == usf::kStateOverhead + kRdramSize4);
+    XSFLIB_CHECK(loaded.state[kStateRdramOffset + 0x200] == 1);
+    XSFLIB_CHECK(loaded.state[kStateRdramOffset + 0x204] == 3);
+    XSFLIB_CHECK(loaded.sources == (std::vector<std::string>{"base.usflib", "track.miniusf", "third.usflib"}));
 }
 
 // Loads `file` alone and returns whether the loader rejects it.
 bool Rejects(const std::vector<uint8_t>& file)
 {
     Files files;
-    files.files["x.usf"] = file;
+    files["x.usf"] = file;
     LoadedUsf loaded;
 
-    return usf::LoadUsf("x.usf", files.Reader(), loaded).has_value();
+    return usf::LoadUsf("x.usf", ExactReader(files), loaded).has_value();
 }
 
 std::vector<uint8_t> StateFile(const std::vector<Chunk>& extra)
@@ -239,8 +255,8 @@ void TrackRomKeepsItsOrder()
 // the state grows. DMEM follows the final value.
 void FinalSizeWord()
 {
-    constexpr uint32_t kDmem4 = 0x75C + 0x400000;
-    constexpr uint32_t kDmem8 = 0x75C + 0x800000;
+    constexpr uint32_t kDmem4 = kStateRdramOffset + kRdramSize4;
+    constexpr uint32_t kDmem8 = kStateRdramOffset + kRdramSize8;
     const auto load = [](uint32_t library_size, uint32_t track_size)
     {
         std::vector<uint8_t> size_word(4);
@@ -253,40 +269,51 @@ void FinalSizeWord()
         track.state = std::vector<Chunk>{{4, size_word}};
 
         Files files;
-        files.files["set.usflib"] = usf::WriteUsf(library, {});
-        files.files["x.usf"] = usf::WriteUsf(track, {{"_lib", "set.usflib"}});
+        files["set.usflib"] = usf::WriteUsf(library, {});
+        files["x.usf"] = usf::WriteUsf(track, {{"_lib", "set.usflib"}});
         LoadedUsf loaded;
-        XSFLIB_CHECK(!usf::LoadUsf("x.usf", files.Reader(), loaded).has_value());
+        XSFLIB_CHECK(!usf::LoadUsf("x.usf", ExactReader(files), loaded).has_value());
 
         return loaded;
     };
 
-    const LoadedUsf smaller = load(0x800000, 0x400000);
-    XSFLIB_CHECK(smaller.state.size() == usf::kStateOverhead + 0x400000);
-    XSFLIB_CHECK(smaller.state[kDmem4] == 0x44);
+    const LoadedUsf smaller = load(kRdramSize8, kRdramSize4);
+    const LoadedUsf larger = load(kRdramSize4, kRdramSize8);
 
-    const LoadedUsf larger = load(0x400000, 0x800000);
-    XSFLIB_CHECK(larger.state.size() == usf::kStateOverhead + 0x800000);
+    XSFLIB_REQUIRE(smaller.state.size() == usf::kStateOverhead + kRdramSize4);
+    XSFLIB_REQUIRE(larger.state.size() == usf::kStateOverhead + kRdramSize8);
+    XSFLIB_CHECK(smaller.state[kDmem4] == 0x44);
     XSFLIB_CHECK(larger.state[kDmem4] == 0x44);
     XSFLIB_CHECK(larger.state[kDmem8] == 0x88);
 }
 
-void Rejections()
+// A reserved area with a state section that holds MinimalState(), and no ROM section.
+std::vector<uint8_t> StateArea()
 {
-    // A good file passes, so that each rejection below comes from its one fault.
-    XSFLIB_CHECK(!Rejects(StateFile({})));
+    return usf::WriteReservedArea({std::nullopt, std::vector<Chunk>{{0, MinimalState()}}});
+}
 
-    // Not USF: another signature, another version, a program.
+// A good file passes, so that each rejection below comes from its one fault.
+void GoodFilePasses()
+{
+    XSFLIB_CHECK(!Rejects(StateFile({})));
+}
+
+// Not USF: another signature, another version, a program.
+void RejectsOtherFormats()
+{
     std::vector<uint8_t> not_psf = StateFile({});
     not_psf[0] = 'X';
     XSFLIB_CHECK(Rejects(not_psf));
-    const std::vector<uint8_t> state_area =
-        usf::WriteReservedArea({std::nullopt, std::vector<Chunk>{{0, MinimalState()}}});
+    const std::vector<uint8_t> state_area = StateArea();
     XSFLIB_CHECK(Rejects(RawFile(state_area, 0x22)));
     XSFLIB_CHECK(Rejects(RawFile(state_area, 0x21, 4)));
+}
 
-    // A reserved area that ends inside a marker, a length or an offset, or before a chunk's data ends.
-    std::vector<uint8_t> area = state_area;
+// A reserved area that ends inside a marker, a length or an offset, or before a chunk's data ends.
+void RejectsShortAreas()
+{
+    std::vector<uint8_t> area = StateArea();
     area.resize(area.size() - 4); // Drops the state section's terminator: the area ends after a chunk, which is fine.
     XSFLIB_CHECK(!Rejects(RawFile(area)));
     XSFLIB_CHECK(Rejects(RawFile(Bytes({0, 0}))));
@@ -299,35 +326,43 @@ void Rejections()
     std::vector<uint8_t> short_data = area;
     short_data.insert(short_data.end(), {8, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3});
     XSFLIB_CHECK(Rejects(RawFile(short_data)));
+}
 
-    // A ROM chunk past cartridge space, and a state chunk past the largest state image. A chunk past the image that the
-    // size word gives is fine. A later file may rewrite the word.
+// A ROM chunk past cartridge space, and a state chunk past the largest state image. A chunk past the image that the
+// size word gives is fine. A later file may rewrite the word.
+void RejectsChunksOutside()
+{
     Sections past_rom;
     past_rom.rom = std::vector<Chunk>{{usf::kMaxRomOffset - 2, Bytes({1, 2, 3, 4})}};
     past_rom.state = std::vector<Chunk>{{0, MinimalState()}};
     XSFLIB_CHECK(Rejects(usf::WriteUsf(past_rom, {})));
-    XSFLIB_CHECK(Rejects(StateFile({{usf::kStateOverhead + 0x800000 - 1, Bytes({1, 2})}})));
-    XSFLIB_CHECK(!Rejects(StateFile({{usf::kStateOverhead + 0x800000 - 1, Bytes({1})}})));
-    XSFLIB_CHECK(!Rejects(StateFile({{usf::kStateOverhead + 0x400000, Bytes({1})}})));
+    XSFLIB_CHECK(Rejects(StateFile({{usf::kStateOverhead + kRdramSize8 - 1, Bytes({1, 2})}})));
+    XSFLIB_CHECK(!Rejects(StateFile({{usf::kStateOverhead + kRdramSize8 - 1, Bytes({1})}})));
+    XSFLIB_CHECK(!Rejects(StateFile({{usf::kStateOverhead + kRdramSize4, Bytes({1})}})));
+}
 
-    // A set without a state, or with a state whose identifier or RDRAM size is wrong.
+// A set without a state, or with a state whose identifier or RDRAM size is wrong.
+void RejectsBadStates()
+{
     Sections rom_only;
     rom_only.rom = std::vector<Chunk>{{0, Bytes({1, 2, 3, 4})}};
     XSFLIB_CHECK(Rejects(usf::WriteUsf(rom_only, {})));
     XSFLIB_CHECK(Rejects(StateFile({{0, Bytes({0, 0, 0, 0})}})));
     XSFLIB_CHECK(Rejects(StateFile({{4, Bytes({0, 0, 0x20, 0})}})));
+}
 
-    // A library that's missing, and one that names itself. Each file holds a state, so that the library alone is at
-    // fault.
+// A library that's missing, and one that names itself. Each file holds a state. The library alone is then at fault.
+void RejectsBadLibraries()
+{
     Sections with_state;
     with_state.state = std::vector<Chunk>{{0, MinimalState()}};
     Files files;
-    files.files["missing.usf"] = usf::WriteUsf(with_state, {{"_lib", "missing.usflib"}});
-    files.files["self.usf"] = usf::WriteUsf(with_state, {{"_lib", "self.usf"}});
+    files["missing.usf"] = usf::WriteUsf(with_state, {{"_lib", "missing.usflib"}});
+    files["self.usf"] = usf::WriteUsf(with_state, {{"_lib", "self.usf"}});
     LoadedUsf loaded;
-    const std::optional<std::string> missing = usf::LoadUsf("missing.usf", files.Reader(), loaded);
+    const std::optional<std::string> missing = usf::LoadUsf("missing.usf", ExactReader(files), loaded);
     XSFLIB_CHECK(missing && missing->find("can't read missing.usflib") != std::string::npos);
-    const std::optional<std::string> self = usf::LoadUsf("self.usf", files.Reader(), loaded);
+    const std::optional<std::string> self = usf::LoadUsf("self.usf", ExactReader(files), loaded);
     XSFLIB_CHECK(self && self->find("nest deeper") != std::string::npos);
 }
 
@@ -339,11 +374,18 @@ int main()
                                     []
                                     {
                                         Layout();
+                                        AbsentSection();
                                         ParseReserved();
                                         RoundTrip();
                                         ChainOrder();
+                                        EmptyLibTags();
                                         TrackRomKeepsItsOrder();
                                         FinalSizeWord();
-                                        Rejections();
+                                        GoodFilePasses();
+                                        RejectsOtherFormats();
+                                        RejectsShortAreas();
+                                        RejectsChunksOutside();
+                                        RejectsBadStates();
+                                        RejectsBadLibraries();
                                     });
 }

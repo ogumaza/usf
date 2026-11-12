@@ -1,26 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-// The RCP's interfaces: MI, VI, AI, PI, SI, RI, the RDRAM chips' registers and the DP's command registers.
+// The RCP's interfaces: MI, VI, AI, PI, SI, RI and the DP's command registers.
 
 #include <algorithm>
 
 #include "xsflib/bytes.h"
 
+#include "n64/bits.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
-
-// DPC_STATUS bits.
-constexpr uint32_t kDpXbus = 1u << 0;
-constexpr uint32_t kDpFreeze = 1u << 1;
-constexpr uint32_t kDpFlush = 1u << 2;
-constexpr uint32_t kDpCommandBufferReady = 1u << 7;
-constexpr uint32_t kDpEndValid = 1u << 9;
-constexpr uint32_t kDpStartValid = 1u << 10;
 
 // VI_STATUS bit 6: serrate, set in the interlaced modes.
 constexpr uint32_t kViSerrate = 1u << 6;
@@ -39,6 +31,44 @@ constexpr uint64_t kSiTransferTicks = 6000;
 
 // The legacy players complete a PI transfer that touches no ROM 0x1000 count units after it starts.
 constexpr uint64_t kLegacyEmptyPiTicks = 0x2000;
+
+// The RDP's full sync command. It raises the DP's interrupt.
+constexpr uint32_t kDpFullSync = 0x29;
+
+// AI_STATUS bits. A full queue sets bits 31 and 0.
+constexpr uint32_t kAiStatusFull = 0x80000001;
+constexpr uint32_t kAiStatusBusy = 1u << 30;
+constexpr uint32_t kAiStatusEnabled = 1u << 25;
+
+// PI_STATUS bits.
+constexpr uint32_t kPiStatusDmaBusy = 1u << 0;
+constexpr uint32_t kPiStatusIoBusy = 1u << 1;
+constexpr uint32_t kPiStatusError = 1u << 2;
+constexpr uint32_t kPiStatusInterrupt = 1u << 3;
+
+// SI_STATUS bits.
+constexpr uint32_t kSiStatusDmaBusy = 1u << 0;
+constexpr uint32_t kSiStatusInterrupt = 1u << 12;
+
+// The bits of a write to DPC_STATUS that clear the TMEM, pipe, command and clock counters.
+constexpr uint32_t kDpWriteClearTmem = 1u << 6;
+constexpr uint32_t kDpWriteClearPipe = 1u << 7;
+constexpr uint32_t kDpWriteClearCommand = 1u << 8;
+constexpr uint32_t kDpWriteClearClock = 1u << 9;
+
+// A write to a register that has a clear bit and a set bit for `flag`. The clear comes first. A write of both bits sets
+// the flag.
+void ApplyClearSet(uint32_t& reg, uint32_t value, int clear_bit, int set_bit, uint32_t flag)
+{
+    if ((value & (1u << clear_bit)) != 0)
+    {
+        reg &= ~flag;
+    }
+    if ((value & (1u << set_bit)) != 0)
+    {
+        reg |= flag;
+    }
+}
 
 // The lengths of the RDP's commands in bytes. Triangles and texture rectangles are longer than the usual 8 bytes.
 uint32_t DpCommandLength(uint32_t op)
@@ -69,34 +99,6 @@ uint32_t DpCommandLength(uint32_t op)
     }
 }
 
-// The current-control value in a chip's MODE register: six bits spread over the register, stored inverted.
-uint32_t DecodeCurrent(uint32_t mode)
-{
-    uint32_t value = ((mode >> 6) & 1) | (((mode >> 14) & 1) << 1) | (((mode >> 22) & 1) << 2) |
-                     (((mode >> 7) & 1) << 3) | (((mode >> 15) & 1) << 4) | (((mode >> 23) & 1) << 5);
-    return value ^ 0x3F;
-}
-
-uint32_t EncodeCurrent(uint32_t value)
-{
-    value ^= 0x3F;
-    return ((value & 1) << 6) | (((value >> 1) & 1) << 14) | (((value >> 2) & 1) << 22) | (((value >> 3) & 1) << 7) |
-           (((value >> 4) & 1) << 15) | (((value >> 5) & 1) << 23);
-}
-
-// A chip returns its data intact at a current-control value of kRdramCurrentHigh or more, and none of it at
-// kRdramCurrentLow or less. Between the two, each set bit survives with a probability that rises with the current.
-// IPL3 finds the current it sets by watching the bits. The two values lie within the ranges that chips show.
-constexpr uint32_t kRdramCurrentLow = 9;
-constexpr uint32_t kRdramCurrentHigh = 15;
-constexpr uint32_t kRdramChipSize = 0x200000;
-
-uint32_t DecodeDeviceId(uint32_t value)
-{
-    return ((value >> 26) & 0x3F) | (((value >> 23) & 1) << 6) | (((value >> 8) & 0xFF) << 7) |
-           (((value >> 7) & 1) << 15);
-}
-
 } // namespace
 
 // MI.
@@ -105,7 +107,7 @@ uint32_t System::ReadMi(uint32_t index)
 {
     switch (index)
     {
-    case 0:
+    case Mi::kMode:
         return mi_.mode;
     case 1:
         return mi_.version;
@@ -118,48 +120,30 @@ uint32_t System::ReadMi(uint32_t index)
 
 void System::WriteMi(uint32_t index, uint32_t value)
 {
-    if (index == 0)
+    if (index == Mi::kMode)
     {
         // MI_MODE: the repeat length, and clear and set bits for init mode, ebus test mode and RDRAM register mode.
-        uint32_t mode = (mi_.mode & ~0x7Fu) | (value & 0x7F);
-        auto apply = [&mode, value](int clear_bit, int set_bit, uint32_t flag)
-        {
-            if ((value & (1u << clear_bit)) != 0)
-            {
-                mode &= ~flag;
-            }
-            if ((value & (1u << set_bit)) != 0)
-            {
-                mode |= flag;
-            }
-        };
-
-        apply(7, 8, 1u << 7);
-        apply(9, 10, 1u << 8);
-        apply(12, 13, 1u << 9);
+        uint32_t mode = (mi_.mode & ~kMiModeRepeatLength) | (value & kMiModeRepeatLength);
+        ApplyClearSet(mode, value, 7, 8, kMiModeRepeat);
+        ApplyClearSet(mode, value, 9, 10, kMiModeEbusTest);
+        ApplyClearSet(mode, value, 12, 13, kMiModeRdramRegister);
         mi_.mode = mode;
 
-        if ((value & (1u << 11)) != 0)
+        if ((value & kMiModeClearDp) != 0)
         {
             LowerMi(kMiInterruptDp);
         }
         return;
     }
 
-    if (index == 3)
+    if (index == Mi::kMask)
     {
         // MI_MASK: a clear bit and a set bit for each interrupt.
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < kMiInterruptCount; i++)
         {
-            if ((value & (1u << (2 * i))) != 0)
-            {
-                mi_.mask &= ~(1u << i);
-            }
-            if ((value & (1u << (2 * i + 1))) != 0)
-            {
-                mi_.mask |= 1u << i;
-            }
+            ApplyClearSet(mi_.mask, value, 2 * i, 2 * i + 1, 1u << i);
         }
+
         UpdateCpuInterrupt();
 
         // In the legacy timing, this write re-checks the interrupt lines and then checks for a due event.
@@ -183,28 +167,43 @@ uint64_t System::VideoClock() const
     }
 }
 
+uint64_t System::FieldRate() const
+{
+    return tv_ == TvType::kPal ? 50 : 60;
+}
+
+uint64_t System::VSyncOrDefault() const
+{
+    const uint64_t v_sync = vi_.registers[Vi::kVSync] & Vi::kLineMask;
+    if (v_sync != 0)
+    {
+        return v_sync;
+    }
+
+    return tv_ == TvType::kPal ? kDefaultVSyncPal : kDefaultVSyncNtsc;
+}
+
+uint64_t System::ElapsedInField(uint64_t time) const
+{
+    return static_cast<uint64_t>(std::max<int64_t>(static_cast<int64_t>(time) - FieldStartAt(time), 0));
+}
+
 uint64_t System::FieldTicks() const
 {
-    const bool pal = tv_ == TvType::kPal;
-    uint64_t v_sync = vi_.registers[6] & 0x3FF;
     if (options_.timing == Timing::kLegacy)
     {
         // (V_SYNC + 1) × L count units, where L is the video clock over the field rate over (V_SYNC + 1), rounded
         // down. A count unit is two ticks.
-        const uint64_t rate = pal ? 50 : 60;
-        const uint64_t lines = v_sync + 1;
-        return 2 * lines * (VideoClock() / rate / lines);
+        const uint64_t lines = LegacyLines();
+        return 2 * lines * (VideoClock() / FieldRate() / lines);
     }
 
     // V_SYNC + 1 half-lines, each half of (H_SYNC + 1) video clocks.
-    uint64_t h_sync = vi_.registers[7] & 0xFFF;
-    if (v_sync == 0)
-    {
-        v_sync = pal ? kDefaultVSyncPal : kDefaultVSyncNtsc;
-    }
+    const uint64_t v_sync = VSyncOrDefault();
+    uint64_t h_sync = vi_.registers[Vi::kHSync] & Vi::kHSyncMask;
     if (h_sync == 0)
     {
-        h_sync = pal ? kDefaultHSyncPal : kDefaultHSyncNtsc;
+        h_sync = tv_ == TvType::kPal ? kDefaultHSyncPal : kDefaultHSyncNtsc;
     }
 
     const uint64_t field_clocks_twice = (v_sync + 1) * (h_sync + 1);
@@ -214,10 +213,15 @@ uint64_t System::FieldTicks() const
 uint64_t System::LegacyFieldTicksSingle() const
 {
     // The legacy timing's length of a field after a write of V_SYNC, computed in single precision.
-    const float rate = tv_ == TvType::kPal ? 50.0f : 60.0f;
-    const uint64_t lines = (vi_.registers[6] & 0x3FF) + 1;
+    const auto rate = static_cast<float>(FieldRate());
+    const uint64_t lines = LegacyLines();
     const float line = static_cast<float>(VideoClock()) / rate / static_cast<float>(lines);
     return 2 * lines * static_cast<uint64_t>(line);
+}
+
+uint64_t System::LegacyLines() const
+{
+    return (vi_.registers[Vi::kVSync] & Vi::kLineMask) + 1;
 }
 
 uint64_t System::ViInterruptOffset() const
@@ -228,13 +232,8 @@ uint64_t System::ViInterruptOffset() const
         return 0;
     }
 
-    uint64_t v_sync = vi_.registers[6] & 0x3FF;
-    if (v_sync == 0)
-    {
-        v_sync = tv_ == TvType::kPal ? kDefaultVSyncPal : kDefaultVSyncNtsc;
-    }
-
-    const uint64_t v_intr = std::min<uint64_t>(vi_.registers[3] & 0x3FF, v_sync);
+    const uint64_t v_sync = VSyncOrDefault();
+    const uint64_t v_intr = std::min<uint64_t>(vi_.registers[Vi::kIntr] & Vi::kLineMask, v_sync);
     return vi_.field_ticks * v_intr / (v_sync + 1);
 }
 
@@ -254,10 +253,8 @@ int64_t System::FieldStartAt(uint64_t time) const
 
 uint32_t System::LegacyViCurrent(uint64_t time) const
 {
-    const uint64_t elapsed =
-        static_cast<uint64_t>(std::max<int64_t>(static_cast<int64_t>(time) - FieldStartAt(time), 0));
-    uint32_t line = static_cast<uint32_t>(elapsed / kLegacyTicksPerViLine) & 0x3FF;
-    if ((vi_.registers[0] & kViSerrate) != 0)
+    uint32_t line = static_cast<uint32_t>(ElapsedInField(time) / kLegacyTicksPerViLine) & Vi::kLineMask;
+    if ((vi_.registers[Vi::kStatus] & kViSerrate) != 0)
     {
         line = (line & ~1u) | vi_.field;
     }
@@ -267,8 +264,7 @@ uint32_t System::LegacyViCurrent(uint64_t time) const
 
 uint64_t System::LegacyViCurrentChangeTime(uint64_t time) const
 {
-    const uint64_t elapsed =
-        static_cast<uint64_t>(std::max<int64_t>(static_cast<int64_t>(time) - FieldStartAt(time), 0));
+    const uint64_t elapsed = ElapsedInField(time);
     const uint64_t next_line = time - elapsed % kLegacyTicksPerViLine + kLegacyTicksPerViLine;
 
     // A new field starts at the next interrupt. That need not be the end of a half-line.
@@ -306,14 +302,14 @@ void System::ScheduleVi()
 void System::FinishViField()
 {
     // On the hardware, the interrupt never comes when V_INTR is beyond the field's last half-line.
-    const uint32_t v_intr = vi_.registers[3] & 0x3FF;
-    const uint32_t v_sync = vi_.registers[6] & 0x3FF;
+    const uint32_t v_intr = vi_.registers[Vi::kIntr] & Vi::kLineMask;
+    const uint32_t v_sync = vi_.registers[Vi::kVSync] & Vi::kLineMask;
     if (options_.timing == Timing::kLegacy || (v_sync != 0 && v_intr <= v_sync))
     {
         RaiseMi(kMiInterruptVi);
     }
 
-    if ((vi_.registers[0] & kViSerrate) != 0)
+    if ((vi_.registers[Vi::kStatus] & kViSerrate) != 0)
     {
         vi_.field ^= 1;
     }
@@ -335,11 +331,11 @@ void System::FinishViField()
 
 uint32_t System::ReadVi(uint32_t index)
 {
-    if (index >= 14)
+    if (index >= Vi::kRegisterCount)
     {
         return 0;
     }
-    if (index != 4)
+    if (index != Vi::kCurrent)
     {
         return vi_.registers[index];
     }
@@ -350,17 +346,11 @@ uint32_t System::ReadVi(uint32_t index)
         return LegacyViCurrent(now_);
     }
 
-    const uint64_t elapsed =
-        static_cast<uint64_t>(std::max<int64_t>(static_cast<int64_t>(now_) - FieldStartAt(now_), 0));
-    uint64_t v_sync = vi_.registers[6] & 0x3FF;
-    if (v_sync == 0)
-    {
-        v_sync = tv_ == TvType::kPal ? kDefaultVSyncPal : kDefaultVSyncNtsc;
-    }
-
+    const uint64_t elapsed = ElapsedInField(now_);
+    const uint64_t v_sync = VSyncOrDefault();
     uint32_t line = static_cast<uint32_t>(elapsed * (v_sync + 1) / std::max<uint64_t>(vi_.field_ticks, 1));
-    line &= 0x3FF;
-    if ((vi_.registers[0] & kViSerrate) != 0)
+    line &= Vi::kLineMask;
+    if ((vi_.registers[Vi::kStatus] & kViSerrate) != 0)
     {
         line = (line & ~1u) | vi_.field;
     }
@@ -370,16 +360,16 @@ uint32_t System::ReadVi(uint32_t index)
 
 void System::WriteVi(uint32_t index, uint32_t value)
 {
-    static constexpr std::array<uint32_t, 14> kMasks = {
+    static constexpr std::array<uint32_t, Vi::kRegisterCount> kMasks = {
         0x0000FFFF, 0x00FFFFFF, 0x00000FFF, 0x000003FF, 0x000003FF, 0x3FFFFFFF, 0x000003FF,
         0x001FFFFF, 0x0FFFFFFF, 0x03FF03FF, 0x03FF03FF, 0x03FF03FF, 0x0FFF0FFF, 0x0FFF0FFF,
     };
 
-    if (index >= 14)
+    if (index >= Vi::kRegisterCount)
     {
         return;
     }
-    if (index == 4)
+    if (index == Vi::kCurrent)
     {
         // A write to VI_V_CURRENT acknowledges the interrupt.
         LowerMi(kMiInterruptVi);
@@ -391,25 +381,39 @@ void System::WriteVi(uint32_t index, uint32_t value)
     if (LateEvents())
     {
         // A write of V_SYNC changes the field's length. A scheduled interrupt keeps its time.
-        if (index == 6)
+        if (index == Vi::kVSync)
         {
             vi_.field_ticks = LegacyFieldTicksSingle();
-            if (events_[static_cast<int>(Event::kVi)] == kNever && vi_.registers[6] != 0)
-            {
-                vi_.next_interrupt = now_ + vi_.field_ticks;
-                Schedule(Event::kVi, vi_.next_interrupt);
-            }
         }
         return;
     }
 
-    if (index == 3 || index == 6 || index == 7)
+    if (index == Vi::kIntr || index == Vi::kVSync || index == Vi::kHSync)
     {
         ScheduleVi();
     }
 }
 
 // AI.
+
+uint32_t System::AiStatus() const
+{
+    uint32_t status = 0;
+    if (ai_.count > 1)
+    {
+        status |= kAiStatusFull;
+    }
+    if (ai_.count > 0)
+    {
+        status |= kAiStatusBusy;
+    }
+    if ((ai_.control & kAiControlDma) != 0)
+    {
+        status |= kAiStatusEnabled;
+    }
+
+    return status;
+}
 
 bool System::AiDelay() const
 {
@@ -438,11 +442,10 @@ uint64_t System::AiBufferTicks(uint32_t length) const
         // length × F × field rate ÷ (4 × sample rate) count units, where F is the field's length in count units. With
         // the legacy timing, F is the length that the VI uses now. A DACRATE of 0 then gives the video clock as the
         // rate.
-        const uint64_t rate = tv_ == TvType::kPal ? 50 : 60;
         const bool late = LateEvents();
         const uint64_t field = (late ? vi_.field_ticks : FieldTicks()) / 2;
         const uint64_t sample_rate = late ? VideoClock() / (ai_.dac_rate + 1) : AudioSampleRate();
-        return 2 * (uint64_t{length} * field * rate / (4 * sample_rate));
+        return 2 * (uint64_t{length} * field * FieldRate() / (4 * sample_rate));
     }
 
     // Four bytes a sample, each lasting DACRATE + 1 video clocks.
@@ -483,7 +486,7 @@ void System::StartAiBuffer()
     audio_scratch_.resize(size_t{frames} * 2);
     for (uint32_t i = 0; i < frames * 2; i++)
     {
-        const uint32_t address = (buffer.address + 2 * i) & 0xFFFFFF;
+        const uint32_t address = (buffer.address + 2 * i) & kRdramAddressMask;
         uint16_t sample = 0;
         if (address + 2 <= rdram_.size())
         {
@@ -520,7 +523,7 @@ void System::FinishAiBuffer()
         RaiseMi(kMiInterruptAi);
     }
 
-    if (ai_.count > 0 && (ai_.control & 1) != 0)
+    if (ai_.count > 0 && (ai_.control & kAiControlDma) != 0)
     {
         StartAiBuffer();
     }
@@ -528,22 +531,9 @@ void System::FinishAiBuffer()
 
 uint32_t System::ReadAi(uint32_t index)
 {
-    if (index == 3)
+    if (index == Ai::kStatus)
     {
-        uint32_t status = 0;
-        if (ai_.count > 1)
-        {
-            status |= 0x80000001;
-        }
-        if (ai_.count > 0)
-        {
-            status |= 0x40000000;
-        }
-        if ((ai_.control & 1) != 0)
-        {
-            status |= 0x02000000;
-        }
-        return status;
+        return AiStatus();
     }
 
     // The other registers read as AI_LENGTH: the bytes left in the buffer that plays. The legacy players read 0 without
@@ -577,6 +567,11 @@ uint32_t System::ReadAi(uint32_t index)
         return 0;
     }
 
+    return AiBytesLeft(buffer);
+}
+
+uint32_t System::AiBytesLeft(const Ai::Buffer& buffer) const
+{
     const uint64_t left = buffer.start + buffer.duration - now_;
     return static_cast<uint32_t>(uint64_t{buffer.length} * left / buffer.duration) & ~7u;
 }
@@ -586,58 +581,22 @@ void System::WriteAi(uint32_t index, uint32_t value)
     switch (index)
     {
     case 0:
-        ai_.dram_address = value & 0xFFFFF8;
+        ai_.dram_address = value & kDmaRdramAddressMask;
         break;
 
     case 1:
-        {
-            ai_.length = value & 0x3FFF8;
-            if (ai_.length == 0)
-            {
-                break;
-            }
-
-            // The legacy timing computes a buffer's duration when the game writes AI_LEN.
-            Ai::Buffer buffer{ai_.dram_address, ai_.length};
-            if (LateEvents())
-            {
-                buffer.duration = std::max<uint64_t>(AiBufferTicks(ai_.length), 1);
-            }
-
-            if (!AiDelay())
-            {
-                // A buffer starts at once. It replaces one that hasn't ended yet, and the two end together.
-                ai_.buffers[0] = buffer;
-                ai_.count = 1;
-                if ((ai_.control & 1) != 0)
-                {
-                    StartAiBuffer();
-                }
-                break;
-            }
-            if (ai_.count >= 2)
-            {
-                break;
-            }
-
-            ai_.buffers[ai_.count] = buffer;
-            ai_.count++;
-            if (ai_.count == 1 && (ai_.control & 1) != 0)
-            {
-                StartAiBuffer();
-            }
-            break;
-        }
+        QueueAiBuffer(value);
+        break;
 
     case 2:
-        ai_.control = value & 1;
-        if ((ai_.control & 1) != 0 && ai_.count > 0 && !ai_.buffers[0].started)
+        ai_.control = value & kAiControlDma;
+        if ((ai_.control & kAiControlDma) != 0 && ai_.count > 0 && !ai_.buffers[0].started)
         {
             StartAiBuffer();
         }
         break;
 
-    case 3:
+    case Ai::kStatus:
         // In the legacy timing, a write of AI_STATUS re-checks the interrupt lines before it clears the latch. The bit
         // therefore stays in MI_INTR until the next re-check.
         if (LateEvents())
@@ -652,11 +611,11 @@ void System::WriteAi(uint32_t index, uint32_t value)
         break;
 
     case 4:
-        ai_.dac_rate = value & 0x3FFF;
+        ai_.dac_rate = value & kAiDacRateMask;
         break;
 
     case 5:
-        ai_.bit_rate = value & 0xF;
+        ai_.bit_rate = value & kAiBitRateMask;
         break;
 
     default:
@@ -664,7 +623,65 @@ void System::WriteAi(uint32_t index, uint32_t value)
     }
 }
 
+void System::QueueAiBuffer(uint32_t length)
+{
+    ai_.length = length & kAiLengthMask;
+    if (ai_.length == 0)
+    {
+        return;
+    }
+
+    // The legacy timing computes a buffer's duration when the game writes AI_LEN.
+    Ai::Buffer buffer{ai_.dram_address, ai_.length};
+    if (LateEvents())
+    {
+        buffer.duration = std::max<uint64_t>(AiBufferTicks(ai_.length), 1);
+    }
+
+    if (!AiDelay())
+    {
+        // A buffer starts at once. It replaces one that hasn't ended yet, and the two end together.
+        ai_.buffers[0] = buffer;
+        ai_.count = 1;
+        if ((ai_.control & kAiControlDma) != 0)
+        {
+            StartAiBuffer();
+        }
+        return;
+    }
+    if (ai_.count >= 2)
+    {
+        return;
+    }
+
+    ai_.buffers[ai_.count] = buffer;
+    ai_.count++;
+    if (ai_.count == 1 && (ai_.control & kAiControlDma) != 0)
+    {
+        StartAiBuffer();
+    }
+}
+
 // PI.
+
+uint32_t System::PiStatus() const
+{
+    uint32_t status = 0;
+    if (pi_.busy)
+    {
+        status |= kPiStatusDmaBusy;
+    }
+    if (pi_.error)
+    {
+        status |= kPiStatusError;
+    }
+    if ((mi_.interrupt & kMiInterruptPi) != 0)
+    {
+        status |= kPiStatusInterrupt;
+    }
+
+    return status;
+}
 
 uint64_t System::PiTransferTicks(uint32_t cart_address, uint32_t length) const
 {
@@ -674,8 +691,8 @@ uint64_t System::PiTransferTicks(uint32_t cart_address, uint32_t length) const
         return std::max<uint64_t>(2 * (length / 8), 1);
     }
 
-    // Each page of the domain costs its latency, and each 16-bit word its pulse width and release time, in RCP
-    // cycles. An RCP cycle is one and a half ticks.
+    // Each page of the domain costs its latency, and each 16-bit word its pulse width and release time, in RCP cycles.
+    // An RCP cycle is one and a half ticks.
     const bool domain2 = (cart_address >= kCartDomain2Address1 && cart_address < kCartDomain1Address1) ||
                          (cart_address >= kCartDomain2Address2 && cart_address < kCartRom);
     const uint32_t* domain = pi_.domains.data() + (domain2 ? 4 : 0);
@@ -707,22 +724,10 @@ uint32_t System::ReadPi(uint32_t index)
 
     case 4:
         {
-            uint32_t status = 0;
-            if (pi_.busy)
-            {
-                status |= 1;
-            }
+            uint32_t status = PiStatus();
             if (pi_.latch_valid && options_.timing == Timing::kHardware && now_ < pi_.latch_until)
             {
-                status |= 2; // IO busy: a write to cartridge space is in the latch.
-            }
-            if (pi_.error)
-            {
-                status |= 4;
-            }
-            if ((mi_.interrupt & kMiInterruptPi) != 0)
-            {
-                status |= 8;
+                status |= kPiStatusIoBusy; // IO busy: a write to cartridge space is in the latch.
             }
             return status;
         }
@@ -741,11 +746,11 @@ void System::WritePi(uint32_t index, uint32_t value)
     switch (index)
     {
     case 0:
-        pi_.dram_address = value & 0xFFFFFE;
+        pi_.dram_address = value & kPiDramAddressMask;
         return;
 
     case 1:
-        pi_.cart_address = value & 0xFFFFFFFE;
+        pi_.cart_address = value & kPiCartAddressMask;
         return;
 
     case 2:
@@ -777,7 +782,7 @@ void System::WritePi(uint32_t index, uint32_t value)
     // A transfer: PI_RD_LEN copies from RDRAM to the cartridge, PI_WR_LEN from the cartridge to RDRAM. The length
     // register holds the length minus one.
     const bool to_rdram = index == 3;
-    const uint32_t requested = (value & 0xFFFFFF) + 1;
+    const uint32_t requested = (value & kPiLengthMask) + 1;
     const uint32_t cart = pi_.cart_address;
     const uint32_t dram = pi_.dram_address;
     pi_.busy = true;
@@ -796,8 +801,8 @@ void System::WritePi(uint32_t index, uint32_t value)
         dram_end = (dram + requested + 7) & ~7u;
     }
 
-    pi_.dram_address = dram_end & 0xFFFFFE;
-    pi_.cart_address = cart_end & 0xFFFFFFFE;
+    pi_.dram_address = dram_end & kPiDramAddressMask;
+    pi_.cart_address = cart_end & kPiCartAddressMask;
 
     const uint32_t length = cart_end - cart;
     uint64_t ticks = PiTransferTicks(cart, length);
@@ -820,8 +825,8 @@ void System::WritePi(uint32_t index, uint32_t value)
 // read from the bus fills two bytes, so a block of odd length copies one byte more.
 //
 // The first block is different. Its writes are masked to the byte, so an odd length copies exactly, unless the block
-// reaches the last two bytes of the buffer. An RDRAM address that isn't a multiple of 8 puts the data at that offset
-// in the buffer, which shortens the block. The hardware counts the block's length from the start of the buffer, so it
+// reaches the last two bytes of the buffer. An RDRAM address that isn't a multiple of 8 puts the data at that offset in
+// the buffer, which shortens the block. The hardware counts the block's length from the start of the buffer, so it
 // writes `offset` bytes fewer at the end. A first block that fills the buffer still moves the RDRAM address to the
 // buffer's end, which leaves a hole. When the first block ends at a page within the first 8 bytes, the next block is
 // shortened by the offset too, and it leaves a hole of that size after it.
@@ -830,14 +835,16 @@ void System::WritePi(uint32_t index, uint32_t value)
 void System::CopyPiToRdram(uint32_t cart, uint32_t dram, uint32_t length, uint32_t& cart_end, uint32_t& dram_end)
 {
     constexpr uint32_t kBuffer = 128;
-    constexpr uint32_t kPage = 0x800;
     uint32_t offset = dram & 7;
     uint32_t remaining = length;
     bool first = true;
     while (remaining > 0)
     {
-        const uint32_t page_left = kPage - (dram & (kPage - 1));
+        // The size of the block: the rest of the transfer, up to the end of the buffer or of the RDRAM page.
+        const uint32_t page_left = kRdramPageSize - (dram & (kRdramPageSize - 1));
         uint32_t size = std::min(remaining, std::min(kBuffer - offset, page_left));
+
+        // How many bytes the block writes, and how far it moves the RDRAM address.
         uint32_t written = 0;
         uint32_t advance = 0;
         if (first)
@@ -880,10 +887,13 @@ void System::CopyPiToRdram(uint32_t cart, uint32_t dram, uint32_t length, uint32
             }
         }
 
+        // The copy.
         for (uint32_t i = 0; i < written; i++)
         {
             CopyRomByte(cart + i, dram + i);
         }
+
+        // The coverage: the ROM bytes that the block reads and the RDRAM bytes that it writes.
         if (Coverage* coverage = ActiveCoverage())
         {
             if (cart >= kCartRom && cart < kPifRom && cart - kCartRom < rom_image_size_)
@@ -892,10 +902,11 @@ void System::CopyPiToRdram(uint32_t cart, uint32_t dram, uint32_t length, uint32
             }
             if (written > 0)
             {
-                coverage->WriteRdram(dram & 0xFFFFFF, written);
+                coverage->WriteRdram(dram & kRdramAddressMask, written);
             }
         }
 
+        // The next block.
         cart += (size + 1) & ~1u;
         dram += advance;
         remaining = remaining > size ? remaining - size : 0;
@@ -908,7 +919,7 @@ void System::CopyPiToRdram(uint32_t cart, uint32_t dram, uint32_t length, uint32
 
 void System::CopyRomByte(uint32_t cart, uint32_t dram)
 {
-    const uint32_t target = dram & 0xFFFFFF;
+    const uint32_t target = dram & kRdramAddressMask;
     if (cart < kCartRom || cart >= kPifRom || target >= rdram_.size())
     {
         return;
@@ -929,6 +940,21 @@ void System::FinishPiDma()
 
 // SI.
 
+uint32_t System::SiStatus() const
+{
+    uint32_t status = 0;
+    if (si_.busy)
+    {
+        status |= kSiStatusDmaBusy;
+    }
+    if ((mi_.interrupt & kMiInterruptSi) != 0)
+    {
+        status |= kSiStatusInterrupt;
+    }
+
+    return status;
+}
+
 uint32_t System::ReadSi(uint32_t index)
 {
     switch (index)
@@ -943,18 +969,7 @@ uint32_t System::ReadSi(uint32_t index)
         return si_.pif_address_write;
 
     case 6:
-        {
-            uint32_t status = 0;
-            if (si_.busy)
-            {
-                status |= 1;
-            }
-            if ((mi_.interrupt & kMiInterruptSi) != 0)
-            {
-                status |= 1u << 12;
-            }
-            return status;
-        }
+        return SiStatus();
 
     default:
         return 0;
@@ -966,7 +981,7 @@ void System::WriteSi(uint32_t index, uint32_t value)
     switch (index)
     {
     case 0:
-        si_.dram_address = value & 0xFFFFF8;
+        si_.dram_address = value & kDmaRdramAddressMask;
         break;
 
     case 1:
@@ -1039,399 +1054,6 @@ void System::WriteRi(uint32_t index, uint32_t value)
     ri_.registers[index & 7] = value & kMasks[index & 7];
 }
 
-// The RDRAM chips' registers. Bit 19 of the address broadcasts a write to every chip. Bits 10 to 18 select a chip
-// by its device ID. A chip that isn't enabled yet answers only when it's the first such chip, which lets IPL3 give
-// each chip its ID in turn.
-
-System::RdramChip* System::SelectRdramChip(uint32_t select)
-{
-    bool seen_disabled = false;
-    for (RdramChip& chip : rdram_chips_)
-    {
-        if (!chip.present)
-        {
-            continue;
-        }
-
-        const bool match = (chip.device_id & ~1u) == (select & ~1u);
-        if (chip.enable)
-        {
-            if (match)
-            {
-                return &chip;
-            }
-        }
-        else if (!seen_disabled)
-        {
-            seen_disabled = true;
-            if (match)
-            {
-                return &chip;
-            }
-        }
-    }
-
-    return nullptr;
-}
-
-uint32_t System::ReadRdramChipRegister(const RdramChip& chip, uint32_t index) const
-{
-    if (!chip.enable)
-    {
-        return 0;
-    }
-
-    switch (index)
-    {
-    case 0:
-        return chip.device_type;
-
-    case 1:
-        return chip.device_id_register;
-
-    case 2:
-        return chip.delay | 0x03030203;
-
-    case 3:
-        {
-            const uint32_t current = chip.auto_current ? chip.current_internal : DecodeCurrent(chip.mode);
-            return ((chip.mode & ~0x00C0C0C0u) | EncodeCurrent(current)) ^ 0xC0C0C0C0u;
-        }
-
-    case 4:
-        return chip.ref_interval;
-
-    case 5:
-        return chip.ref_row;
-
-    case 6:
-        return chip.ras_interval;
-
-    case 7:
-        return chip.min_interval;
-
-    case 8:
-        return chip.address_select;
-
-    case 9:
-        return chip.device_manufacturer;
-
-    default:
-        return 0;
-    }
-}
-
-void System::WriteRdramChipRegister(RdramChip& chip, uint32_t index, uint32_t value)
-{
-    if (index >= 10)
-    {
-        return;
-    }
-
-    // Until the DELAY register sets a write delay of one, a write takes effect only when the MI repeats it (init
-    // mode with a length of 16 bytes or more), and its halfwords arrive swapped.
-    if (chip.write_delay != 1)
-    {
-        const bool init_mode = (mi_.mode & kMiModeRepeat) != 0;
-        const uint32_t repeat = init_mode ? (mi_.mode & 0x7F) + 1 : 0;
-        if (repeat < 16)
-        {
-            return;
-        }
-
-        value = (value << 16) | (value >> 16);
-    }
-
-    switch (index)
-    {
-    case 1:
-        chip.device_id_register = value;
-        chip.device_id = DecodeDeviceId(value);
-        break;
-
-    case 2:
-        chip.delay = value & 0x38381838;
-        chip.write_delay = (chip.delay >> 3) & 7;
-        break;
-
-    case 3:
-        chip.mode = value;
-        chip.enable = (value & (1u << 25)) != 0;
-        chip.auto_current = (value & (1u << 31)) != 0;
-        chip.current = DecodeCurrent(value);
-        if (chip.auto_current)
-        {
-            chip.current_internal = chip.current;
-        }
-        break;
-
-    case 4:
-        chip.ref_interval = value;
-        break;
-
-    case 5:
-        chip.ref_row = value;
-        break;
-
-    case 6:
-        chip.ras_interval = value;
-        break;
-
-    case 7:
-        chip.min_interval = value;
-        break;
-
-    case 8:
-        chip.address_select = value;
-        break;
-
-    default:
-        break;
-    }
-}
-
-uint32_t System::ReadRdramRegister(uint32_t paddr)
-{
-    const bool broadcast = ((paddr >> 19) & 1) != 0;
-    const uint32_t select = (paddr >> 10) & 0x1FF;
-    const uint32_t offset = paddr & 0x3FF;
-    if (broadcast)
-    {
-        return 0;
-    }
-
-    RdramChip* chip = SelectRdramChip(select);
-    if (chip == nullptr)
-    {
-        return 0;
-    }
-    if (offset >= 0x200)
-    {
-        return chip->row;
-    }
-
-    return ReadRdramChipRegister(*chip, (offset >> 2) & 15);
-}
-
-void System::WriteRdramRegister(uint32_t paddr, uint32_t value)
-{
-    const bool broadcast = ((paddr >> 19) & 1) != 0;
-    const uint32_t select = (paddr >> 10) & 0x1FF;
-    const uint32_t offset = paddr & 0x3FF;
-    const uint32_t index = (offset >> 2) & 15;
-    if (broadcast)
-    {
-        for (RdramChip& chip : rdram_chips_)
-        {
-            if (!chip.present)
-            {
-                continue;
-            }
-
-            if (offset >= 0x200)
-            {
-                chip.row = value;
-            }
-            else
-            {
-                WriteRdramChipRegister(chip, index, value);
-            }
-        }
-
-        // Repeat mode lasts for one write to the RDRAM's bus.
-        mi_.mode &= ~kMiModeRepeat;
-        UpdateRdramMapping();
-        return;
-    }
-
-    RdramChip* chip = SelectRdramChip(select);
-    if (chip == nullptr)
-    {
-        return;
-    }
-    if (offset >= 0x200)
-    {
-        chip->row = value;
-        return;
-    }
-
-    WriteRdramChipRegister(*chip, index, value);
-    mi_.mode &= ~kMiModeRepeat;
-    UpdateRdramMapping();
-}
-
-// The chips at power-on, or as IPL3 leaves them: enabled, with device ID 2n, a write delay of one and a current that
-// keeps their data.
-void System::ResetRdramChips(bool configured)
-{
-    const size_t chips = options_.rdram_size > kRdramSize4 ? 4 : 2;
-    for (size_t n = 0; n < rdram_chips_.size(); n++)
-    {
-        RdramChip& chip = rdram_chips_[n];
-        chip = {};
-        chip.present = n < chips;
-        if (configured)
-        {
-            chip.enable = true;
-            chip.device_id = static_cast<uint32_t>(2 * n);
-            chip.write_delay = 1;
-            chip.current = 63;
-        }
-    }
-    UpdateRdramMapping();
-}
-
-// RDRAM is plain memory once chip n is enabled with device ID 2n and a current high enough to keep its data. Until
-// then, each access finds its chip by device ID, and reads lose bits while the current is too low.
-void System::UpdateRdramMapping()
-{
-    bool plain = true;
-    for (size_t n = 0; n < rdram_chips_.size(); n++)
-    {
-        const RdramChip& chip = rdram_chips_[n];
-        if (chip.present && (!chip.enable || chip.device_id != 2 * n || chip.current < kRdramCurrentHigh))
-        {
-            plain = false;
-            break;
-        }
-    }
-
-    const uint32_t size = plain ? static_cast<uint32_t>(rdram_.size()) : 0;
-    if (size != direct_rdram_size_)
-    {
-        direct_rdram_size_ = size;
-        cpu_->InvalidateFetchCache();
-    }
-}
-
-uint32_t System::ReadMappedRdram32(uint32_t paddr)
-{
-    for (size_t n = 0; n < rdram_chips_.size(); n++)
-    {
-        const RdramChip& chip = rdram_chips_[n];
-        if (!chip.present || !chip.enable || (chip.device_id >> 1) != (paddr >> 21))
-        {
-            continue;
-        }
-
-        const uint32_t offset = static_cast<uint32_t>(n) * kRdramChipSize + (paddr & (kRdramChipSize - 1));
-        if (offset + 4 > rdram_.size())
-        {
-            return 0;
-        }
-
-        if (Coverage* coverage = ActiveCoverage())
-        {
-            coverage->ReadRdram(offset, 4);
-        }
-
-        const uint32_t value = xsflib::LoadBe32(rdram_.data() + offset);
-        if (chip.current >= kRdramCurrentHigh)
-        {
-            return value;
-        }
-        if (chip.current <= kRdramCurrentLow)
-        {
-            return 0;
-        }
-
-        // A fixed xorshift sequence decides which bits survive, so that every run gives the same result.
-        const uint32_t chance = (chip.current - kRdramCurrentLow) * 256 / (kRdramCurrentHigh - kRdramCurrentLow);
-        uint32_t result = 0;
-        for (int bit = 0; bit < 32; bit++)
-        {
-            rdram_noise_ ^= rdram_noise_ << 13;
-            rdram_noise_ ^= rdram_noise_ >> 17;
-            rdram_noise_ ^= rdram_noise_ << 5;
-            if (((value >> bit) & 1) != 0 && (rdram_noise_ & 255) < chance)
-            {
-                result |= 1u << bit;
-            }
-        }
-        return result;
-    }
-
-    return 0;
-}
-
-// In repeat mode, one CPU write to RDRAM repeats an 8-byte pattern over the repeat length, counted from the 8-byte word
-// that the write addresses and wrapping within its 2 KiB page. Bytes before the write's address keep their values. A
-// doubleword store gives the pattern. A smaller store gives the word that it puts on the bus, twice. The mode then
-// turns itself off. n64brew describes the mode, and n64-systemtest's MI tests give the details.
-void System::WriteRdramRepeated(uint32_t paddr, uint64_t value, int size)
-{
-    std::array<uint8_t, 8> pattern{};
-    if (size == 8)
-    {
-        xsflib::StoreBe64(pattern.data(), value);
-    }
-    else
-    {
-        uint32_t word = static_cast<uint32_t>(value);
-        if (size == 1)
-        {
-            word = static_cast<uint32_t>(value << (8 * (3 - (paddr & 3))));
-        }
-        else if (size == 2)
-        {
-            word = static_cast<uint32_t>(value << (8 * (2 - (paddr & 2))));
-        }
-        xsflib::StoreBe32(pattern.data(), word);
-        xsflib::StoreBe32(pattern.data() + 4, word);
-    }
-
-    mi_.mode &= ~kMiModeRepeat;
-    const uint32_t length = (mi_.mode & 0x7F) + 1;
-    const uint32_t base = paddr & ~7u;
-    const uint32_t page = paddr & ~0x7FFu;
-    for (uint32_t i = paddr - base; i < length; i++)
-    {
-        const uint32_t address = page | ((base + i) & 0x7FF);
-        if (address < direct_rdram_size_)
-        {
-            rdram_[address] = pattern[i & 7];
-            if (Coverage* coverage = ActiveCoverage())
-            {
-                coverage->WriteRdram(address, 1);
-            }
-        }
-        else
-        {
-            WriteMappedRdram(address, pattern[i & 7], 1);
-        }
-    }
-}
-
-void System::WriteMappedRdram(uint32_t paddr, uint64_t value, int size)
-{
-    for (size_t n = 0; n < rdram_chips_.size(); n++)
-    {
-        const RdramChip& chip = rdram_chips_[n];
-        if (!chip.present || !chip.enable || (chip.device_id >> 1) != (paddr >> 21))
-        {
-            continue;
-        }
-
-        const uint32_t offset = static_cast<uint32_t>(n) * kRdramChipSize + (paddr & (kRdramChipSize - 1));
-        if (offset + size > rdram_.size())
-        {
-            return;
-        }
-
-        uint8_t* p = rdram_.data() + offset;
-        for (int i = size - 1; i >= 0; i--)
-        {
-            p[i] = static_cast<uint8_t>(value);
-            value >>= 8;
-        }
-        if (Coverage* coverage = ActiveCoverage())
-        {
-            coverage->WriteRdram(offset, static_cast<uint32_t>(size));
-        }
-        return;
-    }
-}
-
 // DP.
 
 uint32_t System::ReadDp(uint32_t index)
@@ -1464,13 +1086,13 @@ void System::WriteDp(uint32_t index, uint32_t value)
     case 0:
         if ((dp_.status & kDpStartValid) == 0)
         {
-            dp_.start = value & 0xFFFFF8;
+            dp_.start = value & kDmaRdramAddressMask;
             dp_.status |= kDpStartValid;
         }
         break;
 
     case 1:
-        dp_.end = value & 0xFFFFF8;
+        dp_.end = value & kDmaRdramAddressMask;
         if ((dp_.status & kDpStartValid) != 0)
         {
             dp_.current = dp_.start;
@@ -1490,36 +1112,25 @@ void System::WriteDp(uint32_t index, uint32_t value)
 
 void System::WriteDpStatus(uint32_t value)
 {
-    auto apply = [this, value](int clear_bit, int set_bit, uint32_t flag)
-    {
-        if ((value & (1u << clear_bit)) != 0)
-        {
-            dp_.status &= ~flag;
-        }
-        if ((value & (1u << set_bit)) != 0)
-        {
-            dp_.status |= flag;
-        }
-    };
-
+    // XBUS, freeze and flush each have a clear bit and the set bit above it, from bit 0.
     const bool was_frozen = (dp_.status & kDpFreeze) != 0;
-    apply(0, 1, kDpXbus);
-    apply(2, 3, kDpFreeze);
-    apply(4, 5, kDpFlush);
+    ApplyClearSet(dp_.status, value, 0, 1, kDpXbus);
+    ApplyClearSet(dp_.status, value, 2, 3, kDpFreeze);
+    ApplyClearSet(dp_.status, value, 4, 5, kDpFlush);
 
-    if ((value & (1u << 6)) != 0)
+    if ((value & kDpWriteClearTmem) != 0)
     {
         dp_.tmem = 0;
     }
-    if ((value & (1u << 7)) != 0)
+    if ((value & kDpWriteClearPipe) != 0)
     {
         dp_.pipe_busy = 0;
     }
-    if ((value & (1u << 8)) != 0)
+    if ((value & kDpWriteClearCommand) != 0)
     {
         dp_.buffer_busy = 0;
     }
-    if ((value & (1u << 9)) != 0)
+    if ((value & kDpWriteClearClock) != 0)
     {
         dp_.clock = 0;
     }
@@ -1539,14 +1150,14 @@ void System::RunDpCommands()
     }
 
     const bool from_dmem = (dp_.status & kDpXbus) != 0;
-    auto read_word = [this, from_dmem](uint32_t address) -> uint32_t
+    const auto read_word = [this, from_dmem](uint32_t address) -> uint32_t
     {
         if (from_dmem)
         {
-            return xsflib::LoadBe32(rsp_->Dmem().data() + (address & 0xFF8));
+            return xsflib::LoadBe32(rsp_->Dmem().data() + (address & Rsp::kDoubleWordAddressMask));
         }
 
-        address &= 0xFFFFF8;
+        address &= kDmaRdramAddressMask;
         return address + 4 <= rdram_.size() ? xsflib::LoadBe32(rdram_.data() + address) : 0;
     };
 
@@ -1561,7 +1172,7 @@ void System::RunDpCommands()
             break;
         }
 
-        if (op == 0x29)
+        if (op == kDpFullSync)
         {
             RaiseMi(kMiInterruptDp);
         }

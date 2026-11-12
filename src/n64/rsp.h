@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 
+#include "n64/constants.h"
 #include "n64/rsp_vector.h"
 
 namespace usf::n64
@@ -32,6 +33,22 @@ struct SpRegisters
 class Rsp
 {
 public:
+    // DMEM or IMEM.
+    using SpMemory = std::array<uint8_t, kSpMemSize>;
+
+    // The bit of an SP memory address that selects IMEM.
+    static constexpr uint32_t kImemBit = kSpImem - kSpDmem;
+
+    // The offset of a byte, a word and a doubleword in DMEM or IMEM.
+    static constexpr uint32_t kAddressMask = kSpMemSize - 1;
+    static constexpr uint32_t kWordAddressMask = kAddressMask & ~3u;
+    static constexpr uint32_t kDoubleWordAddressMask = kAddressMask & ~7u;
+
+    // The fields of the DMA registers, each in 8-byte units: an SP memory address with the IMEM bit, and a length, a
+    // skip or an offset in DMEM or IMEM. The mask of the RDRAM address is kDmaRdramAddressMask in constants.h.
+    static constexpr uint32_t kDmaSpAddressMask = (kImemBit | kAddressMask) & ~7u;
+    static constexpr uint32_t kDmaLengthMask = kAddressMask & ~7u;
+
     explicit Rsp(System& system);
 
     void Reset();
@@ -40,10 +57,21 @@ public:
     uint64_t Run(uint64_t cycles);
     bool Halted() const;
 
-    std::array<uint8_t, 0x1000>& Dmem();
-    std::array<uint8_t, 0x1000>& Imem();
-    const std::array<uint8_t, 0x1000>& Dmem() const;
-    const std::array<uint8_t, 0x1000>& Imem() const;
+    SpMemory& Dmem();
+    SpMemory& Imem();
+    const SpMemory& Dmem() const;
+    const SpMemory& Imem() const;
+
+    // DMEM or IMEM, as bit 12 of an SP memory address selects.
+    SpMemory& Memory(uint32_t address)
+    {
+        return (address & kImemBit) != 0 ? imem_ : dmem_;
+    }
+
+    const SpMemory& Memory(uint32_t address) const
+    {
+        return (address & kImemBit) != 0 ? imem_ : dmem_;
+    }
 
     // The registers at 0x04040000 by word index, as the CPU reads and writes them.
     uint32_t ReadRegister(uint32_t index);
@@ -69,7 +97,6 @@ public:
     SpRegisters Registers() const;
     void SetRegisters(const SpRegisters& registers);
 
-    VectorUnit& Vector();
     uint32_t Gpr(int index) const;
 
 private:
@@ -155,9 +182,25 @@ private:
         uint32_t count = 0;
         uint32_t skip = 0;
         bool to_rdram = false;
+
+        // The SP length registers: the length in bits 0 to 11, the count in bits 12 to 19 and the skip in bits 20 to
+        // 31.
+        uint32_t LengthRegister() const;
+        void SetLengthRegister(uint32_t value);
     };
 
+    // The count and the skip in the SP length registers.
+    static constexpr int kDmaCountShift = 12;
+    static constexpr uint32_t kDmaCountMask = 0xFF;
+    static constexpr int kDmaSkipShift = 20;
+
     static Decoded Decode(uint32_t instruction);
+
+    // The ops of the SPECIAL functions, the REGIMM branches and the COP2 moves. Each returns Op::kNone for a field that
+    // names none.
+    static Op SpecialOp(uint32_t funct);
+    static Op RegimmOp(uint32_t rt);
+    static Op Cop2MoveOp(uint32_t rs);
 
     void Step();
     void Execute(const Decoded& instruction);
@@ -165,6 +208,10 @@ private:
     void LoadVector(uint32_t instruction);
     void StoreVector(uint32_t instruction);
     void Branch(bool taken, uint32_t target);
+
+    // The return address that a jump or a branch writes when it links: the instruction after its delay slot.
+    uint32_t Link() const;
+
     uint32_t ReadCop0(uint32_t index);
     void WriteCop0(uint32_t index, uint32_t value);
     void WriteStatus(uint32_t value);
@@ -172,8 +219,11 @@ private:
     void StartDma();
     uint64_t DmaTicks(const Dma& dma) const;
 
+    // DMEM by byte address. An access that runs past the end wraps to the start.
     uint8_t Read8(uint32_t address) const;
     void Write8(uint32_t address, uint8_t value);
+    uint32_t Read16(uint32_t address) const;
+    void Write16(uint32_t address, uint32_t value);
     uint32_t Read32(uint32_t address) const;
     void Write32(uint32_t address, uint32_t value);
 
@@ -183,9 +233,9 @@ private:
     void StoreBytes(int vt, int first, int end, uint32_t address);
 
     System& system_;
-    std::array<uint8_t, 0x1000> dmem_{};
-    std::array<uint8_t, 0x1000> imem_{};
-    std::array<Decoded, 0x400> decoded_{};
+    SpMemory dmem_{};
+    SpMemory imem_{};
+    std::array<Decoded, kSpMemSize / 4> decoded_{};
     std::array<uint32_t, 32> gpr_{};
     uint32_t pc_ = 0;
     uint32_t next_pc_ = 4;

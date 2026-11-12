@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -15,6 +14,7 @@
 #include "xsflib/rip/length.h"
 #include "xsflib/sha256.h"
 
+#include "rip/length.h"
 #include "rip/profile.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
@@ -38,7 +38,7 @@ struct RunSettings
     double margin_seconds = 10.0;
 
     // How long a track without a length runs for its coverage.
-    double unknown_length_seconds = 600.0;
+    double unknown_length_seconds = kMaxTrackSeconds;
 };
 
 // What one track's run found.
@@ -51,8 +51,8 @@ struct TrackRun
     std::vector<xsflib::Sha256::Digest> reference;
     uint64_t check_frames = 0;
 
-    // The CPU's reads and writes above physical 0x80000000 during the run. A console has nothing there, and neither
-    // has a legacy player. An arcade board has its RAM and inputs there.
+    // The CPU's reads and writes above physical 0x80000000 during the run. A console has nothing there, and neither has
+    // a legacy player. An arcade board has its RAM and inputs there.
     uint64_t board_accesses = 0;
 };
 
@@ -60,8 +60,8 @@ struct TrackRun
 TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Track& track,
                   const RunSettings& settings);
 
-// Plays the mini at `path` with its library and compares its output with the run's. Returns the difference, or
-// nothing when they're the same.
+// Plays the mini at `path` with its library and compares its output with the run's. Returns the difference, or nothing
+// when they're the same.
 std::optional<std::string> CheckTrack(const std::string& path, const TrackRun& run);
 
 // The tags of a set's files.
@@ -71,12 +71,12 @@ struct SetTags
     std::string ripper;       // The value of usfrip: the ripper's name and version.
 };
 
-// The files of a set: the library, and the mini of the track `track`, the `index`th of the set from 0. The library
-// holds the flags and usfrip. A mini holds them too, with _lib (`library_name`), the common tags, the title, the
-// track number, the length and fade of `timing`, and usfdriver.
+// The files of a set: the library, and the mini of the track `number`, from 1. The library holds the flags and usfrip.
+// A mini holds the tags `tags` that xsflib's WriteMinis gives it: the common tags, the title, and the length and fade
+// of a track with a timing. It holds the flags and usfrip (`ripper`) too, with _lib (`library_name`), the track number
+// and usfdriver.
 std::vector<uint8_t> LibraryFile(const GameProfile& profile, const Sections& library, const SetTags& tags);
-std::vector<uint8_t> MiniFile(const GameProfile& profile, const Sections& sections, const Track& track, size_t index,
-                              const std::optional<xsflib::rip::Timing>& timing, const std::string& library_name,
-                              const SetTags& tags);
+std::vector<uint8_t> MiniFile(const GameProfile& profile, const Sections& sections, uint32_t number,
+                              const std::string& library_name, const std::string& ripper, xsflib::psf::Tags tags);
 
 } // namespace usf::rip

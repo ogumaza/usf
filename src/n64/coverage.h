@@ -9,44 +9,30 @@
 #include <cstdint>
 #include <vector>
 
+#include "n64/word_set.h"
+
 namespace usf::n64
 {
-
-// A range of bytes [offset, offset + length).
-struct ByteRange
-{
-    uint32_t offset;
-    uint32_t length;
-};
 
 class Coverage
 {
 public:
     explicit Coverage(uint32_t rdram_size);
 
-    // Forgets everything recorded so far.
-    void Clear();
-
     // Records accesses. Offsets are cartridge offsets for the ROM and physical addresses for RDRAM.
     void ReadRom(uint32_t offset, uint32_t length);
     void ReadRdram(uint32_t address, uint32_t length);
     void WriteRdram(uint32_t address, uint32_t length);
 
-    // The results, as ranges of whole 4-byte words in ascending order.
-    std::vector<ByteRange> RomRanges() const;
-    std::vector<ByteRange> RdramRanges() const;
-    bool RomWordRead(uint32_t offset) const;
-    bool RdramWordNeeded(uint32_t address) const;
-    uint64_t RomWordsRead() const;
-    uint64_t RdramWordsNeeded() const;
+    // The results: the ROM words read, and the RDRAM words read before anything wrote them.
+    const WordSet& RomWords() const;
+    const WordSet& RdramWords() const;
 
 private:
-    static std::vector<ByteRange> Ranges(const std::vector<uint8_t>& bits);
-
     uint32_t rdram_size_;
-    std::vector<uint8_t> rom_read_;      // One bit for each ROM word.
+    WordSet rom_read_;                   // It grows to the last ROM word read.
     std::vector<uint8_t> rdram_written_; // Four bits for each RDRAM word, one for each byte written.
-    std::vector<uint8_t> rdram_needed_;  // One bit for each RDRAM word.
+    WordSet rdram_needed_;
 };
 
 } // namespace usf::n64

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(usf VERSION 1.1.0 LANGUAGES C CXX)
+project(usf VERSION 1.1.1 LANGUAGES C CXX)
 
 # xsflib is a library for players and rippers of the PSF family. It's a submodule. Its XsflibProject.cmake sets what a
 # project built on it starts with: C++20, a release build by default, the static C runtime, the options that keep the
@@ -14,6 +14,17 @@ endif()
 include(externals/xsflib/cmake/XsflibProject.cmake)
 xsflib_project(CHECK_COMPILERS NAME usf PREFIX USF)
 
+# clang-cl warns of designated initializers that leave fields out, as the game profiles do. Filling in every field would
+# copy non-zero defaults into each initializer, where they can drift.
+if (USF_CLANG_CL)
+    list(APPEND USF_WARNINGS -Wno-missing-designated-field-initializers)
+endif()
+
+# The game profiles have text outside ASCII. MSVC reads source files as UTF-8 only with /utf-8.
+if (MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # The player's programs use xsflib's playback framework and its command-line frame. The framework requires zlib. The
 # frame's FLAC output requires libFLAC.
 set(XSFLIB_PSF ON)
@@ -23,6 +34,7 @@ xsflib_add_libraries(xsflib)
 # The emulator core: the VR4300, the RSP, the RCP's interfaces, the PIF, boot, save states and coverage.
 add_library(usf_n64 STATIC
     src/n64/aleck64.cpp
+    src/n64/bits.h
     src/n64/boot.cpp
     src/n64/constants.h
     src/n64/coverage.cpp
@@ -30,18 +42,24 @@ add_library(usf_n64 STATIC
     src/n64/cpu.cpp
     src/n64/cpu.h
     src/n64/cpu_cop0.cpp
+    src/n64/cpu_cop0.h
     src/n64/cpu_fast.cpp
     src/n64/cpu_fpu.cpp
+    src/n64/mips_registers.h
     src/n64/pif.cpp
     src/n64/pif.h
     src/n64/rcp.cpp
+    src/n64/rdram.cpp
     src/n64/rsp.cpp
     src/n64/rsp.h
     src/n64/rsp_vector.cpp
     src/n64/rsp_vector.h
     src/n64/save_state.cpp
+    src/n64/save_state.h
     src/n64/system.cpp
     src/n64/system.h
+    src/n64/word_set.cpp
+    src/n64/word_set.h
 )
 target_include_directories(usf_n64 PUBLIC src)
 target_link_libraries(usf_n64 PUBLIC xsflib::common)
@@ -68,6 +86,11 @@ add_library(usf_format STATIC
 target_include_directories(usf_format PUBLIC src)
 target_link_libraries(usf_format PUBLIC usf_n64 xsflib::psf_container)
 target_compile_options(usf_format PRIVATE ${USF_WARNINGS})
+
+# The writer of USF files, on xsflib's PSF writer. That writer requires zlib. usf_format and n64run leave it out.
+add_library(usf_write STATIC src/usf/usf_write.cpp)
+target_link_libraries(usf_write PUBLIC usf_format xsflib::psf)
+target_compile_options(usf_write PRIVATE ${USF_WARNINGS})
 
 # The ripper: the game profiles, the snapshot, the track player, the length analysis, trimming by coverage, the set's
 # files and the generic driver with its MIPS encoder.
@@ -106,6 +129,8 @@ add_library(usf_rip STATIC
     src/rip/games/nus_nwre_usa_rev1.cpp
     src/rip/games/nus_nyse_usa.cpp
     src/rip/games/nus_nzse_usa.cpp
+    src/rip/games/tracks.cpp
+    src/rip/games/tracks.h
     src/rip/length.cpp
     src/rip/length.h
     src/rip/mips.cpp
@@ -124,7 +149,7 @@ add_library(usf_rip STATIC
     src/rip/trim.cpp
     src/rip/trim.h
 )
-target_link_libraries(usf_rip PUBLIC usf_format xsflib::rip xsflib::rom_set)
+target_link_libraries(usf_rip PUBLIC usf_write xsflib::rip xsflib::rom_set)
 target_compile_options(usf_rip PRIVATE ${USF_WARNINGS})
 
 # The player of the front ends: one rate for each track, on xsflib's playback framework.
@@ -182,14 +207,21 @@ if (USF_TESTS)
     xsflib_add_project_test(usf save_state usf_n64)
     xsflib_add_project_test(usf cpu usf_n64)
     xsflib_add_project_test(usf legacy_timing usf_n64)
-    xsflib_add_project_test(usf fast_path usf_n64)
-    xsflib_add_project_test(usf usf_file usf_format)
+    xsflib_add_project_test(usf fast_path usf_rip)
+    xsflib_add_project_test(usf rsp_vector usf_n64)
+    xsflib_add_project_test(usf fpu usf_n64)
+    xsflib_add_project_test(usf usf_file usf_write)
     xsflib_add_project_test(usf mips usf_rip)
     xsflib_add_project_test(usf rip usf_rip)
     xsflib_add_project_test(usf player usf_rip)
     xsflib_add_project_test(usf pif usf_n64)
     xsflib_add_project_test(usf aleck64 usf_n64)
     xsflib_add_project_test(usf rom_set usf_rip)
+
+    # On Windows, UTF-8 is the code page of the tests that open files by a narrow path, and of the programs that take
+    # paths on the command line. A temporary or build folder can then have a name outside ASCII.
+    xsflib_add_utf8_manifest(usf_rip_test)
+    xsflib_add_utf8_manifest(usf_player_test)
 
     # A USF set made from small programs, with no game data. The tests of the front ends play it.
     add_library(usf_test_set STATIC tests/test_set.cpp tests/test_set.h)
@@ -201,22 +233,22 @@ if (USF_TESTS)
     add_executable(usf_make_test_set tests/make_test_set.cpp)
     target_link_libraries(usf_make_test_set PRIVATE usf_test_set)
     target_compile_options(usf_make_test_set PRIVATE ${USF_WARNINGS})
+    xsflib_add_utf8_manifest(usf_make_test_set)
     set(usf_test_set_folder ${CMAKE_CURRENT_BINARY_DIR}/test-set)
     add_test(NAME usf_test_set_files COMMAND usf_make_test_set ${usf_test_set_folder})
     set_tests_properties(usf_test_set_files PROPERTIES FIXTURES_SETUP usf_test_set)
 
     # usfplay's WAV files against the core's output, on the set above.
-    add_executable(usf_play_sets tests/play_sets.cpp)
-    target_link_libraries(usf_play_sets PRIVATE usf_format)
+    add_executable(usf_play_sets tests/expect_file.h tests/play_sets.cpp)
+    target_link_libraries(usf_play_sets PRIVATE usf_format xsflib::testing seqlib::seqlib)
     target_compile_options(usf_play_sets PRIVATE ${USF_WARNINGS})
+    xsflib_add_utf8_manifest(usf_play_sets)
     add_test(NAME usfplay_test_set COMMAND usf_play_sets ${usf_test_set_folder} $<TARGET_FILE:usfplay>
                                            ${CMAKE_CURRENT_BINARY_DIR}/play-test-set)
     set_tests_properties(usfplay_test_set PROPERTIES FIXTURES_REQUIRED usf_test_set)
 
     # usfplay reports the version it was built as.
-    string(REPLACE "." "\\." version_pattern ${usf_VERSION})
-    add_test(NAME usfplay_version COMMAND usfplay --version)
-    set_tests_properties(usfplay_version PROPERTIES PASS_REGULAR_EXPRESSION "^usfplay ${version_pattern}[\r\n]*$")
+    xsflib_add_version_test(usfplay VERSION ${usf_VERSION})
 
     # The test ROMs aren't in the repo. USF_TEST_ROMS names a folder that holds them: n64-systemtest.z64 from
     # n64-systemtest, and PeterLemon's N64 tests in their repository's layout under PeterLemon/.
@@ -224,6 +256,7 @@ if (USF_TESTS)
     add_executable(usf_test_rom tests/test_rom.cpp)
     target_link_libraries(usf_test_rom PRIVATE usf_n64)
     target_compile_options(usf_test_rom PRIVATE ${USF_WARNINGS})
+    xsflib_add_utf8_manifest(usf_test_rom)
     if (USF_TEST_ROMS)
         include(tests/test_roms.cmake)
     endif()

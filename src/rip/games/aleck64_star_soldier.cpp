@@ -14,20 +14,19 @@
 //   its first quiet arrival from the 9th on: 1.60 s after boot. The game has reset its sound by then, and the attract
 //   mode makes no sound until 19.9 s.
 // - The game needs a controller to start the attract mode.
-// - Two threads read the board through TLB entries that the players refuse: the thread at 0x800A8CE0 at 0x0200000A,
-//   and the thread at 0x800ABFC0 at 0x02000002. The ripper stops both. The music runs in the audio thread.
+// - Two threads read the board through TLB entries that the players refuse: the thread at 0x800A8CE0 at 0x0200000A, and
+//   the thread at 0x800ABFC0 at 0x02000002. The ripper stops both. The music runs in the audio thread.
 // - The sequence reader at 0x8005AFC4 reads one track of a sequence. At 0x8005B17C it has reached the end of a loop,
 //   with the loop's count in a0, the end's address in v0 and the track in t3. A count of 0xFF repeats for ever.
-
-#include <cstdio>
 
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -38,11 +37,8 @@ constexpr uint32_t kLoopEnd = 0x8005B17C;
 constexpr uint32_t kFirstBoardThread = 0x800A8CE0;
 constexpr uint32_t kSecondBoardThread = 0x800ABFC0;
 
-// RDRAM near the end that stays zero through the attract mode.
-constexpr uint32_t kDriverAddress = 0x807FF000;
-
-constexpr int kSongs = 26;
-constexpr int kSameAsSong15 = 19;
+constexpr uint32_t kSongs = 26;
+constexpr uint32_t kSameAsSong15 = 19;
 
 // The board's inputs while nothing is pressed.
 constexpr uint32_t kSwitches = 0x7FDFFFFF;
@@ -60,38 +56,33 @@ GameProfile Aleck64StarSoldier()
     profile.serial = "Aleck64 Star Soldier: Vanishing Earth";
     profile.sha1 = "a29348632ed7726d75d693dfb007f277c1f6a563";
     profile.year = "1998";
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
     profile.board_inputs.switches = kSwitches;
     profile.board_inputs.system = kSystemInputs;
 
     profile.snapshot_address = kMainLoopWait;
     profile.snapshot_hit = kWaitAfterReset;
-    profile.quiet_tries = 1000000;
+    profile.quiet_tries = kUntilQuiet;
     profile.boot_seconds = 5.0;
     profile.stop_threads = {kFirstBoardThread, kSecondBoardThread};
 
     CallDriverOptions driver;
-    driver.address = kDriverAddress;
+    driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}}}};
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 2, .track_register = 11, .count_register = 4});
+        {.address = kLoopEnd, .target_register = mips::kV0, .track_register = mips::kT3, .count_register = mips::kA0});
 
-    for (int number = 0; number < kSongs; number++)
+    for (uint32_t number = 0; number < kSongs; number++)
     {
         if (number == kSameAsSong15)
         {
             continue;
         }
 
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[16];
-        std::snprintf(name, sizeof(name), "Song %d", number);
-        track.name = name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Song", number, TitleBase::kDecimal)));
     }
 
     return profile;

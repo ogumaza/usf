@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// The snapshot: the game booted and run to the profile's snapshot point, with the profile's changes made there, and
-// the state saved. Each track's state is the snapshot's with the track's number in the selector.
+// The snapshot: the game booted and run to the profile's snapshot point, with the profile's changes made there, and the
+// state saved. Each track's state is the snapshot's with the track's number in the selector.
 
 #pragma once
 
 #include <cstdint>
 #include <span>
-#include <string>
 #include <vector>
 
 #include "n64/system.h"

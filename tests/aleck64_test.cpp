@@ -2,15 +2,14 @@
 
 // The Aleck64's board as the CPU's bus sees it: its RAM at 0xC0000000, its inputs at 0xC0800000 with the mahjong
 // panel's rows, the E90's video memory, the console's view of the same addresses, and the legacy page tables' view of
-// TLB entries that map the board's RAM. The addresses and bit meanings
-// come from the board's behavioural specification.
+// TLB entries that map the board's RAM. The addresses and bit meanings come from the board's behavioural specification.
 
 #include <cstdint>
 
-#include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 
 #include "n64/system.h"
+#include "test_programs.h"
 
 namespace
 {
@@ -21,9 +20,9 @@ using usf::n64::BoardInputs;
 using usf::n64::Options;
 using usf::n64::System;
 
-Options BoardOptions(Board board)
+// `options` on `board`, with the board's 8 MiB of RAM.
+Options BoardOptions(Board board, Options options = {})
 {
-    Options options;
     options.board = board;
     options.rdram_size = usf::n64::kRdramSize8;
 
@@ -89,7 +88,7 @@ void InputScript()
     coin.inputs.system = 0xFFFBFFFF;
     system.AddBoardInput(coin);
 
-    system.PrepareIpl3(0xAC, false);
+    system.PrepareIpl3(0xAC);
     const uint32_t before = system.ReadPhysical32(0xC0800004);
     system.Run(system.TicksPerSecond() / 20);
     const uint32_t after = system.ReadPhysical32(0xC0800004);
@@ -136,13 +135,9 @@ uint32_t LoadThroughTlb(System& system)
     entry.global = true;
     system.GetCpu().SetTlb(0, entry);
 
-    constexpr uint32_t kCode = 0x1000;
     constexpr uint32_t kLuiT0 = 0x3C08E000;  // lui t0, 0xE000
     constexpr uint32_t kLoadT3 = 0x8D0B0004; // lw t3, 4(t0)
-    xsflib::StoreBe32(system.Rdram().data() + kCode, kLuiT0);
-    xsflib::StoreBe32(system.Rdram().data() + kCode + 4, kLoadT3);
-    system.GetCpu().SetPc(0xFFFFFFFF80000000ull + kCode);
-    system.Run(2 * system.TicksPerInstruction());
+    usf::testing::RunProgram(system, {kLuiT0, kLoadT3}, 2);
 
     return static_cast<uint32_t>(system.GetCpu().Gpr(11));
 }
@@ -151,16 +146,12 @@ uint32_t LoadThroughTlb(System& system)
 // it. A console's run counts the access that faults.
 void LegacyPages()
 {
-    Options board_options = BoardOptions(Board::kAleck64);
-    board_options.timing = usf::n64::Timing::kLegacy;
-    System board(board_options);
+    System board(BoardOptions(Board::kAleck64, usf::testing::LegacyOptions()));
     board.WritePhysical32(0xC0000004, 0x12345678);
     const uint64_t board_before = board.BoardAccesses();
     const uint32_t board_word = LoadThroughTlb(board);
 
-    Options console_options;
-    console_options.timing = usf::n64::Timing::kLegacy;
-    System console(console_options);
+    System console(usf::testing::LegacyOptions());
     const uint32_t console_word = LoadThroughTlb(console);
 
     XSFLIB_CHECK(board_word == 0x12345678);
@@ -177,7 +168,7 @@ void ResetKeepsInputs()
     system.SetBoardInputs(inputs);
     system.WritePhysical32(0xC0000000, 1);
 
-    system.PrepareIpl3(0xAC, false);
+    system.PrepareIpl3(0xAC);
 
     XSFLIB_CHECK(system.ReadPhysical32(0xC0800000) == 0x7FFFFFFF);
     XSFLIB_CHECK(system.ReadPhysical32(0xC0000000) == 0);

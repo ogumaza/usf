@@ -9,18 +9,20 @@
 #include "xsflib/testing/check.h"
 
 #include "n64/system.h"
+#include "test_programs.h"
 
 namespace
 {
 
 using usf::n64::Cpu;
+using usf::n64::CpuState;
 using usf::n64::System;
+using usf::testing::kStatusCu0And1;
 
 std::vector<uint8_t> TestRom()
 {
     // A cartridge of 1 MiB with a PAL country code in its header.
-    std::vector<uint8_t> rom(0x100000, 0);
-    xsflib::StoreBe32(rom.data(), 0x80371240);
+    std::vector<uint8_t> rom = usf::testing::TestRom(0x100000);
     rom[0x3E] = 0x50;
 
     return rom;
@@ -33,7 +35,9 @@ void Layout()
     Cpu& cpu = system.GetCpu();
     cpu.SetPc(0xFFFFFFFF80001234ull);
     cpu.SetGpr(3, 0x1122334455667788ull);
-    cpu.SetHi(0x0102030405060708ull);
+    CpuState cpu_state = cpu.State();
+    cpu_state.hi = 0x0102030405060708ull;
+    cpu.SetState(cpu_state);
     system.Rdram()[0x1000] = 0xAB;
     system.WritePhysical32(0x0430000C, 0x2); // MI_MASK: set the SP interrupt's mask bit.
     system.GetPif().Ram()[1] = 0x84;
@@ -131,8 +135,8 @@ int main()
                                     []
                                     {
                                         Layout();
-                                        RoundTrip(0x34000000); // FR set.
-                                        RoundTrip(0x30000000); // FR clear.
+                                        RoundTrip(kStatusCu0And1 | usf::n64::kStatusFr); // FR set.
+                                        RoundTrip(kStatusCu0And1);                       // FR clear.
                                         JoybusFrameOfAState();
                                     });
 }

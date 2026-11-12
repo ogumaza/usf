@@ -11,3 +11,6 @@ xsflib_add_xmplay_plugin(xmp-usfplay
     OPTIONS ${USF_WARNINGS})
 xsflib_add_version(xmp-usfplay VERSION ${usf_VERSION} DEFINE USF_VERSION DESCRIPTION "USF plugin for XMPlay"
                    PRODUCT usf COPYRIGHT "Copyright (c) 2026 the usf authors. MIT licence.")
+
+# plugins/plugin_traits.h contains the traits that xmp-usfplay shares with the foobar2000 component.
+target_include_directories(xmp-usfplay PRIVATE ${PROJECT_SOURCE_DIR}/plugins)

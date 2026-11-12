@@ -1,37 +1,23 @@
 // SPDX-License-Identifier: MIT
 
-// Short programs on the CPU, with results that the VR4300's manual defines: sign extension of 32-bit results,
-// unaligned loads and stores, delay slots and the exception vector.
+// Short programs on the CPU, with results that the VR4300's manual defines: sign extension of 32-bit results, unaligned
+// loads and stores, delay slots and the exception vector.
 
 #include <cstdint>
-#include <initializer_list>
 
 #include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 
 #include "n64/system.h"
+#include "test_programs.h"
 
 namespace
 {
 
 using usf::n64::System;
 
-constexpr uint32_t kCode = 0x1000;
-constexpr uint64_t kCodeAddress = 0xFFFFFFFF80000000ull + kCode;
-
-// Puts the program at kCode and runs it for `instructions` instructions.
-void RunProgram(System& system, std::initializer_list<uint32_t> program, uint64_t instructions)
-{
-    uint32_t address = kCode;
-    for (uint32_t word : program)
-    {
-        xsflib::StoreBe32(system.Rdram().data() + address, word);
-        address += 4;
-    }
-
-    system.GetCpu().SetPc(kCodeAddress);
-    system.Run(instructions * system.TicksPerInstruction());
-}
+using usf::testing::kCodeAddress;
+using usf::testing::RunProgram;
 
 void SignExtension()
 {

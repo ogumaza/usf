@@ -22,6 +22,7 @@
 
 #include "test_set.h"
 #include "usf/uniform_rate_player.h"
+#include "usf/usf_file.h"
 
 namespace
 {
@@ -29,46 +30,28 @@ namespace
 using Playback = xsflib::player::Playback<usf::UniformRatePlayer>;
 using usf::testing::TestRate;
 using usf::testing::TestTrack;
+using xsflib::testing::ExactReader;
 
-constexpr uint32_t kFirstRate = 1520;
-constexpr uint32_t kSecondRate = 2204;
+constexpr uint32_t kFirstDacRate = 1520;
+constexpr uint32_t kSecondDacRate = 2204;
 
 // Files in memory, by path.
-struct Files
-{
-    std::map<std::string, std::vector<uint8_t>> files;
-
-    xsflib::psf::FileReader Reader() const
-    {
-        return [this](const std::string& path, std::vector<uint8_t>& data)
-        {
-            const auto it = files.find(path);
-            if (it == files.end())
-            {
-                return false;
-            }
-
-            data = it->second;
-
-            return true;
-        };
-    }
-};
+using Files = std::map<std::string, std::vector<uint8_t>>;
 
 // A set of one library and one mini with `tags`, at set/track.miniusf.
 Files MakeSet(const TestTrack& track, xsflib::psf::Tags tags)
 {
     Files files;
-    files.files["set/lib.usflib"] = usf::testing::MakeTestLibrary({{"_enablecompare", "1"}, {"_enablefifofull", "1"}});
+    files["set/lib.usflib"] = usf::testing::MakeTestLibrary({{"_enablecompare", "1"}, {"_enablefifofull", "1"}});
     tags["_lib"] = "lib.usflib";
-    files.files["set/track.miniusf"] = usf::testing::MakeTestMini(track, tags);
+    files["set/track.miniusf"] = usf::testing::MakeTestMini(track, tags);
 
     return files;
 }
 
 bool Open(Playback& playback, const Files& files)
 {
-    return playback.Open("set/track.miniusf", files.Reader()) && playback.Start();
+    return playback.Open("set/track.miniusf", ExactReader(files)) && playback.Start();
 }
 
 // Whether `pcm` holds the track's ramp from `first`, frame after frame.
@@ -86,6 +69,19 @@ bool HoldsRamp(const std::vector<int16_t>& pcm, const TestTrack& track, uint64_t
     return true;
 }
 
+// The track's ramp for its first `frames` frames: the model of what the track plays.
+std::vector<int16_t> Ramp(const TestTrack& track, size_t frames)
+{
+    std::vector<int16_t> pcm(2 * frames);
+    for (size_t i = 0; i < frames; i++)
+    {
+        pcm[2 * i] = usf::testing::TestLeft(track, i);
+        pcm[2 * i + 1] = usf::testing::TestRight(track, i);
+    }
+
+    return pcm;
+}
+
 // The whole playback's frames.
 std::vector<int16_t> RenderAll(Playback& playback)
 {
@@ -95,8 +91,8 @@ std::vector<int16_t> RenderAll(Playback& playback)
 void PlaysAtTheTracksRate()
 {
     TestTrack track;
-    track.dac_rate = kFirstRate;
-    const uint32_t rate = TestRate(kFirstRate);
+    track.dac_rate = kFirstDacRate;
+    const uint32_t rate = TestRate(kFirstDacRate);
     const Files files = MakeSet(track, {{"length", "1"}});
 
     Playback playback;
@@ -113,24 +109,23 @@ void PlaysAtTheTracksRate()
 void LengthFollowsEachTracksRate()
 {
     TestTrack track;
-    track.dac_rate = kSecondRate;
-    const uint32_t rate = TestRate(kSecondRate);
+    track.dac_rate = kSecondDacRate;
+    const uint32_t rate = TestRate(kSecondDacRate);
     const Files files = MakeSet(track, {{"length", "2"}, {"fade", "1"}});
+    const std::vector<int16_t> model = Ramp(track, 3 * size_t{rate});
 
     Playback playback;
     const bool opened = Open(playback, files);
     const std::vector<int16_t> pcm = RenderAll(playback);
 
     XSFLIB_CHECK(opened);
-    XSFLIB_CHECK(rate != TestRate(kFirstRate));
+    XSFLIB_CHECK(rate != TestRate(kFirstDacRate));
     XSFLIB_CHECK(playback.SampleRate() == static_cast<int>(rate));
     XSFLIB_CHECK(playback.PlayFrames() == 2 * uint64_t{rate});
     XSFLIB_CHECK(playback.FadeFrames() == rate);
-    XSFLIB_CHECK(pcm.size() == 6 * size_t{rate});
 
     // The fade starts after the play time. The fade's first frame is the ramp as it stands.
-    const std::vector<int16_t> before(pcm.begin(), pcm.begin() + 4 * static_cast<std::ptrdiff_t>(rate));
-    XSFLIB_CHECK(HoldsRamp(before, track));
+    xsflib::testing::CheckLengthAndFade(pcm, model, 2 * size_t{rate}, rate);
 }
 
 // A game that changes its rate mid-track plays on at the track's rate. The player converts the later frames. The second
@@ -139,11 +134,11 @@ void LengthFollowsEachTracksRate()
 void ConvertsALaterRate()
 {
     TestTrack track;
-    track.dac_rate = kFirstRate;
+    track.dac_rate = kFirstDacRate;
     track.change_after = 4;
-    track.second_dac_rate = kSecondRate;
-    const uint32_t first = TestRate(kFirstRate);
-    const uint32_t second = TestRate(kSecondRate);
+    track.second_dac_rate = kSecondDacRate;
+    const uint32_t first = TestRate(kFirstDacRate);
+    const uint32_t second = TestRate(kSecondDacRate);
     const Files files = MakeSet(track, {{"length", "1"}});
 
     Playback playback;
@@ -152,7 +147,7 @@ void ConvertsALaterRate()
 
     XSFLIB_CHECK(opened);
     XSFLIB_CHECK(playback.SampleRate() == static_cast<int>(first));
-    XSFLIB_CHECK(pcm.size() == 2 * size_t{first});
+    XSFLIB_REQUIRE(pcm.size() == 2 * size_t{first});
 
     // A buffer takes the rate at the moment it starts. When the rate changes, the fourth buffer is still waiting behind
     // the third. The first three buffers are therefore the ramp itself.
@@ -171,30 +166,14 @@ void ConvertsALaterRate()
     XSFLIB_CHECK(follows);
 }
 
+// A seek on and then one back land where a render from the start does.
 void SeeksBackAndOn()
 {
     TestTrack track;
     const Files files = MakeSet(track, {{"length", "2"}});
+    const std::vector<int16_t> model = Ramp(track, 30000 + 256);
 
-    Playback playback;
-    const bool opened = Open(playback, files);
-    std::vector<int16_t> pcm(2 * 256);
-    const size_t read_first = playback.Render(pcm.data(), 256);
-    const bool first_ramp = HoldsRamp(pcm, track);
-
-    const bool on = playback.Seek(30000);
-    const size_t read_on = playback.Render(pcm.data(), 256);
-    const bool on_ramp = HoldsRamp(pcm, track, 30000);
-
-    const bool back = playback.Seek(1000);
-    const size_t read_back = playback.Render(pcm.data(), 256);
-    const bool back_ramp = HoldsRamp(pcm, track, 1000);
-
-    XSFLIB_CHECK(opened && on && back);
-    XSFLIB_CHECK(read_first == 256 && read_on == 256 && read_back == 256);
-    XSFLIB_CHECK(first_ramp);
-    XSFLIB_CHECK(on_ramp);
-    XSFLIB_CHECK(back_ramp);
+    xsflib::testing::CheckSeeks<Playback>("set/track.miniusf", ExactReader(files), model, {30000, 1000}, 256);
 }
 
 void RendersAhead()
@@ -206,29 +185,19 @@ void RendersAhead()
     auto playback = std::make_unique<Playback>();
     const bool opened = Open(*playback, files);
     xsflib::player::RenderAhead ahead(std::move(playback));
-    ahead.Seek(5000);
+    const auto read = [&ahead](int16_t* out, size_t frames)
+    {
+        return ahead.Read(out, frames);
+    };
 
     // A read returns what the worker has rendered so far, at least one frame.
-    std::vector<int16_t> pcm(2 * 256);
-    size_t read_seek = 0;
-    while (read_seek < 256)
-    {
-        const size_t count = ahead.Read(pcm.data() + 2 * read_seek, 256 - read_seek);
-        if (count == 0)
-        {
-            break;
-        }
-
-        read_seek += count;
-    }
-    const bool seek_ramp = HoldsRamp(pcm, track, 5000);
-
+    ahead.Seek(5000);
+    const std::vector<int16_t> pcm = xsflib::testing::RenderFrames(read, 256);
     ahead.Seek(0);
-    const std::vector<int16_t> all =
-        xsflib::testing::RenderFrames([&](int16_t* out, size_t frames) { return ahead.Read(out, frames); });
+    const std::vector<int16_t> all = xsflib::testing::RenderFrames(read);
 
     XSFLIB_CHECK(opened);
-    XSFLIB_CHECK(read_seek == 256 && seek_ramp);
+    XSFLIB_CHECK(pcm.size() == 2 * 256 && HoldsRamp(pcm, track, 5000));
     XSFLIB_CHECK(all.size() == 2 * size_t{rate});
     XSFLIB_CHECK(HoldsRamp(all, track));
     XSFLIB_CHECK(ahead.Error().empty());
@@ -284,7 +253,7 @@ void StoppedBuffersGiveSilence()
 
     const uint32_t sent = kBuffers * usf::testing::kTestBufferFrames;
     XSFLIB_CHECK(opened);
-    XSFLIB_CHECK(pcm.size() == 4 * size_t{rate});
+    XSFLIB_REQUIRE(pcm.size() == 4 * size_t{rate});
     XSFLIB_CHECK(
         HoldsRamp(std::vector<int16_t>(pcm.begin(), pcm.begin() + 2 * static_cast<std::ptrdiff_t>(sent)), track));
     XSFLIB_CHECK(std::all_of(pcm.begin() + 2 * static_cast<std::ptrdiff_t>(sent), pcm.end(),
@@ -297,11 +266,11 @@ void FindsALibraryInAnArchive()
     TestTrack track;
     Files files = MakeSet(track, {{"length", "1"}});
     Files archive;
-    archive.files["unpack://zip|5|a.zip|lib.usflib"] = files.files["set/lib.usflib"];
-    archive.files["unpack://zip|5|a.zip|track.miniusf"] = files.files["set/track.miniusf"];
+    archive["unpack://zip|5|a.zip|lib.usflib"] = files["set/lib.usflib"];
+    archive["unpack://zip|5|a.zip|track.miniusf"] = files["set/track.miniusf"];
 
     usf::LoadedUsf set;
-    const auto error = usf::LoadUsf("unpack://zip|5|a.zip|track.miniusf", archive.Reader(), set, "/\\|");
+    const auto error = usf::LoadUsf("unpack://zip|5|a.zip|track.miniusf", ExactReader(archive), set, "/\\|");
 
     XSFLIB_CHECK(!error);
     XSFLIB_CHECK(set.sources.size() == 2);
@@ -312,13 +281,9 @@ void ReportsAMissingLibrary()
 {
     TestTrack track;
     Files files = MakeSet(track, {{"length", "1"}});
-    files.files.erase("set/lib.usflib");
+    files.erase("set/lib.usflib");
 
-    Playback playback;
-    const bool opened = playback.Open("set/track.miniusf", files.Reader());
-
-    XSFLIB_CHECK(!opened);
-    XSFLIB_CHECK(!std::string(playback.Error()).empty());
+    xsflib::testing::CheckRefusals<Playback>({{"set/track.miniusf", "lib.usflib"}}, ExactReader(files));
 }
 
 } // namespace

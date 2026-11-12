@@ -6,28 +6,48 @@
 
 #include "xsflib/bytes.h"
 
+#include "n64/save_state.h"
 #include "n64/system.h"
 #include "rip/mips.h"
+#include "test_mips.h"
+#include "test_programs.h"
 #include "usf/usf_file.h"
 
 namespace usf::testing
 {
-
 namespace
 {
 
 namespace mips = usf::rip::mips;
 
-constexpr uint32_t kKseg0 = 0x80000000;
+using mips::kS0;
+using mips::kS1;
+using mips::kS2;
+using mips::kS3;
+using mips::kS4;
+using mips::kS5;
+using mips::kT0;
+using mips::kT1;
+using mips::kT2;
+using mips::kT3;
+using mips::kT4;
+using mips::kT6;
+using mips::kT7;
+using mips::kT8;
+using mips::kT9;
+using mips::kZero;
+using usf::n64::kCop0Epc;
+using usf::n64::kCop0Status;
+using usf::n64::kKseg0;
+
 constexpr uint32_t kExceptionVector = 0x00000180;
-constexpr uint32_t kCode = 0x00001000;
 constexpr uint32_t kParameters = 0x00100000;
 constexpr uint32_t kWorkArea = 0x00100100;
 constexpr uint32_t kBuffers = 0x00200000; // Two buffers, 0x1000 bytes apart.
 constexpr uint32_t kRomSize = 0x1000;
 
-constexpr uint32_t kRspImem = 0x04001000;
-constexpr uint32_t kStateRdram = 0x75C; // The state image's position of RDRAM.
+// The NTSC video clock. A rate is the clock over DACRATE + 1.
+constexpr uint32_t kNtscVideoClock = 48681812;
 
 // The parameters' offsets in their block.
 constexpr uint16_t kDacRate = 0;
@@ -38,10 +58,6 @@ constexpr uint16_t kMask = 16;
 constexpr uint16_t kChangeAfter = 20;
 constexpr uint16_t kSecondDacRate = 24;
 constexpr uint16_t kStopAfter = 28;
-
-// COP0's registers.
-constexpr uint32_t kStatus = 12;
-constexpr uint32_t kEpc = 14;
 
 // Status with coprocessor 1 usable and the MI's interrupt line enabled: without interrupts, with them, and inside an
 // exception.
@@ -82,32 +98,10 @@ uint32_t MulS(uint32_t fd, uint32_t fs, uint32_t ft)
     return 0x46000002 | (ft << 16) | (fs << 11) | (fd << 6);
 }
 
-// The RSP's instructions.
-uint32_t RspVector(uint32_t funct, uint32_t vd, uint32_t vs, uint32_t vt)
-{
-    return 0x4A000000 | (vt << 16) | (vs << 11) | (vd << 6) | funct;
-}
-
-// A load or store of a whole vector at a multiple of 16 bytes from address 0 of DMEM.
-uint32_t RspLqv(uint32_t vt, uint32_t sixteens)
-{
-    return 0xC8000000 | (vt << 16) | (4u << 11) | sixteens;
-}
-
-uint32_t RspSqv(uint32_t vt, uint32_t sixteens)
-{
-    return 0xE8000000 | (vt << 16) | (4u << 11) | sixteens;
-}
-
 // The RSP's program: a loop of vector multiplies and sums on two vectors of DMEM, and then a BREAK. The word at address
 // 0 of DMEM gives the loop's count.
 std::vector<uint32_t> MakeRspProgram()
 {
-    constexpr uint32_t kVmulf = 0x00;
-    constexpr uint32_t kVmudh = 0x07;
-    constexpr uint32_t kVmacf = 0x08;
-    constexpr uint32_t kVadd = 0x10;
-
     return {
         0x8C010000,                 // lw r1, 0(r0)
         RspLqv(1, 1),               // loop: lqv $v1[0], 16(r0)
@@ -127,58 +121,27 @@ std::vector<uint32_t> MakeRspProgram()
 // The handler of the AI's interrupt: it clears the interrupt, leaves interrupts off and returns past the idle loop.
 std::vector<uint32_t> MakeExceptionHandler()
 {
-    using mips::kS2;
-    using mips::kT8;
-    using mips::kT9;
-    using mips::kZero;
-
     mips::Assembler code(kKseg0 | kExceptionVector);
     code.Emit(mips::Sw(kZero, kS2, 0xC));
     code.LoadImmediate(kT9, kStatusInException);
-    code.Emit(Mtc0(kT9, kStatus));
-    code.Emit(Mfc0(kT8, kEpc));
+    code.Emit(Mtc0(kT9, kCop0Status));
+    code.Emit(Mfc0(kT8, kCop0Epc));
     code.Emit(mips::Addiu(kT8, kT8, 8));
-    code.Emit(Mtc0(kT8, kEpc));
+    code.Emit(Mtc0(kT8, kCop0Epc));
     code.Emit(kEret);
 
     return code.Words();
 }
 
-// The CPU's program (see test_set.h). s0 holds the ramp, s1 the buffers so far, s2 the AI's registers, s3 the
-// parameters, s4 the SP's registers and s5 the buffer in use. The handler overwrites only t8 and t9.
-std::vector<uint32_t> MakeCpuProgram()
+// The parameters, the video clock that a buffer's length follows, and the AI with its interrupt.
+void EmitSetUp(mips::Assembler& code)
 {
-    using mips::kS0;
-    using mips::kS1;
-    using mips::kS2;
-    using mips::kT0;
-    using mips::kT1;
-    using mips::kT2;
-    using mips::kT3;
-    using mips::kT4;
-    using mips::kT5;
-    using mips::kT6;
-    using mips::kT7;
-    using mips::kZero;
-    constexpr auto kS3 = static_cast<mips::Register>(19);
-    constexpr auto kS4 = static_cast<mips::Register>(20);
-    constexpr auto kS5 = static_cast<mips::Register>(21);
-
-    mips::Assembler code(kKseg0 | kCode);
-
-    // The parameters, the video clock that a buffer's length follows, and the AI with its interrupt.
     code.Emit(mips::Lui(kS3, mips::High(kKseg0 | kParameters)));
     code.Emit(mips::Addiu(kS3, kS3, mips::Low(kKseg0 | kParameters)));
     code.Emit(mips::Lui(kT0, 0xA440));
     code.Emit(mips::Addiu(kT1, kZero, 524));
     code.Emit(mips::Sw(kT1, kT0, 0x18));
-    code.Emit(mips::Lui(kS2, 0xA450));
-    code.Emit(mips::Lw(kT0, kS3, kDacRate));
-    code.Emit(mips::Sw(kT0, kS2, 0x10));
-    code.Emit(mips::Addiu(kT0, kZero, 15));
-    code.Emit(mips::Sw(kT0, kS2, 0x14));
-    code.Emit(mips::Addiu(kT0, kZero, 1));
-    code.Emit(mips::Sw(kT0, kS2, 0x8));
+    EmitAiSetup(code, mips::Lw(kT0, kS3, kDacRate));
     code.Emit(mips::Lui(kT0, 0xA430));
     code.Emit(mips::Addiu(kT1, kZero, 0x20));
     code.Emit(mips::Sw(kT1, kT0, 0xC));
@@ -186,9 +149,11 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Emit(mips::Addiu(kS0, kZero, 0));
     code.Emit(mips::Addiu(kS1, kZero, 0));
     code.Emit(mips::Addiu(kS5, kZero, 0));
+}
 
-    // The program may stop sending buffers. It goes on running with its interrupts off.
-    const uint32_t loop = code.Here();
+// The program may stop sending buffers. It goes on running with its interrupts off.
+void EmitStop(mips::Assembler& code)
+{
     code.Emit(mips::Lw(kT0, kS3, kStopAfter));
     code.Emit(mips::Addiu(kT1, kS1, 1));
     const size_t go_on = code.Size();
@@ -198,8 +163,11 @@ std::vector<uint32_t> MakeCpuProgram()
     code.J(stopped);
     code.Emit(mips::kNop);
     code.SetBranchTarget(go_on, code.Here());
+}
 
-    // The buffer: frame i holds the ramp on the left and one more on the right.
+// The buffer: frame i holds the ramp on the left and one more on the right.
+void EmitFill(mips::Assembler& code)
+{
     code.Emit(mips::Lui(kT0, mips::High(kKseg0 | kBuffers)));
     code.Emit(mips::Sll(kT1, kS5, 12));
     code.Emit(mips::Addu(kT0, kT0, kT1));
@@ -219,8 +187,11 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Emit(mips::Addiu(kT4, kZero, kTestBufferFrames));
     code.Bne(kT1, kT4, fill);
     code.Emit(mips::kNop);
+}
 
-    // The CPU's work loop.
+// The CPU's work loop.
+void EmitWorkLoop(mips::Assembler& code)
+{
     code.Emit(mips::Lw(kT0, kS3, kCpuLoops));
     const size_t skip_work = code.Size();
     code.Beq(kT0, kZero, code.Here());
@@ -240,9 +211,12 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Bne(kT0, kZero, work);
     code.Emit(mips::kNop);
     code.SetBranchTarget(skip_work, code.Here());
+}
 
-    // The RSP's task: its loop count, an audio task's type, the start of IMEM, and a clear of halt, broke and the
-    // interrupt. The task runs to its BREAK.
+// The RSP's task: its loop count, an audio task's type, the start of IMEM, and a clear of halt, broke and the
+// interrupt. The task runs to its BREAK.
+void EmitRspTask(mips::Assembler& code)
+{
     code.Emit(mips::Lw(kT0, kS3, kRspLoops));
     const size_t skip_task = code.Size();
     code.Beq(kT0, kZero, code.Here());
@@ -261,8 +235,11 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Beq(kT2, kZero, wait_rsp);
     code.Emit(mips::kNop);
     code.SetBranchTarget(skip_task, code.Here());
+}
 
-    // Hand the buffer to the AI.
+// Hand the buffer to the AI.
+void EmitHandOff(mips::Assembler& code)
+{
     code.Emit(mips::Lui(kT0, kBuffers >> 16));
     code.Emit(mips::Sll(kT1, kS5, 12));
     code.Emit(mips::Addu(kT0, kT0, kT1));
@@ -272,8 +249,11 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Emit(mips::Addiu(kS5, kS5, 1));
     code.Emit(mips::Andi(kS5, kS5, 1));
     code.Emit(mips::Addiu(kS1, kS1, 1));
+}
 
-    // The rate changes after the buffers that the parameters say. A DACRATE takes effect at the next buffer.
+// The rate changes after the buffers that the parameters say. A DACRATE takes effect at the next buffer.
+void EmitRateChange(mips::Assembler& code)
+{
     code.Emit(mips::Lw(kT0, kS3, kChangeAfter));
     const size_t same_rate = code.Size();
     code.Bne(kS1, kT0, code.Here());
@@ -281,55 +261,52 @@ std::vector<uint32_t> MakeCpuProgram()
     code.Emit(mips::Lw(kT0, kS3, kSecondDacRate));
     code.Emit(mips::Sw(kT0, kS2, 0x10));
     code.SetBranchTarget(same_rate, code.Here());
+}
 
-    // With room in the AI, the next buffer starts at once. Otherwise the program sleeps until the AI's interrupt. The
-    // handler returns to the jump after the idle loop.
+// With room in the AI, the next buffer starts at once. Otherwise the program sleeps until the AI's interrupt. The
+// handler returns to the jump after the idle loop.
+void EmitIdle(mips::Assembler& code, uint32_t loop)
+{
     code.Emit(mips::Lw(kT0, kS2, 0xC));
     code.Emit(mips::Srl(kT0, kT0, 31));
     code.Beq(kT0, kZero, loop);
     code.Emit(mips::kNop);
     code.LoadImmediate(kT0, kStatusAwake);
-    code.Emit(Mtc0(kT0, kStatus));
+    code.Emit(Mtc0(kT0, kCop0Status));
     const uint32_t idle = code.Here();
     code.J(idle);
     code.Emit(mips::kNop);
     code.J(loop);
     code.Emit(mips::kNop);
-
-    return code.Words();
 }
 
-// A ROM of one page, in the console's byte order.
-std::vector<uint8_t> MakeRom()
+// The CPU's program (see test_set.h). s0 holds the ramp, s1 the buffers so far, s2 the AI's registers, s3 the
+// parameters, s4 the SP's registers and s5 the buffer in use. The handler overwrites only t8 and t9.
+std::vector<uint32_t> MakeCpuProgram()
 {
-    std::vector<uint8_t> rom(kRomSize, 0);
-    xsflib::StoreBe32(rom.data(), 0x80371240);
+    mips::Assembler code(kKseg0 | kCode);
+    EmitSetUp(code);
 
-    return rom;
+    const uint32_t loop = code.Here();
+    EmitStop(code);
+    EmitFill(code);
+    EmitWorkLoop(code);
+    EmitRspTask(code);
+    EmitHandOff(code);
+    EmitRateChange(code);
+    EmitIdle(code, loop);
+
+    return code.Words();
 }
 
 // The state: the programs in memory, and the CPU about to start. The ROM's bytes in LE word order are the file's.
 std::vector<uint8_t> MakeState()
 {
-    usf::n64::Options options;
-    options.timing = usf::n64::Timing::kLegacy;
-    usf::n64::System system(options);
-    system.LoadRom(MakeRom());
-
-    const auto load = [&system](uint32_t address, const std::vector<uint32_t>& words)
-    {
-        for (size_t i = 0; i < words.size(); i++)
-        {
-            system.WritePhysical32(address + 4 * static_cast<uint32_t>(i), words[i]);
-        }
-    };
-
-    load(kExceptionVector, MakeExceptionHandler());
-    load(kCode, MakeCpuProgram());
-    load(kRspImem, MakeRspProgram());
-
-    system.GetCpu().SetCop0(usf::n64::kCop0Status, kStatusAsleep);
-    system.GetCpu().SetPc(0xFFFFFFFF00000000ull | kKseg0 | kCode);
+    usf::n64::System system(LegacyOptions());
+    system.LoadRom(TestRom(kRomSize));
+    WriteProgram(system, kExceptionVector, MakeExceptionHandler());
+    StartProgram(system, MakeCpuProgram(), kStatusAsleep);
+    WriteProgram(system, usf::n64::kSpImem, MakeRspProgram());
 
     return system.SaveState();
 }
@@ -338,7 +315,7 @@ std::vector<uint8_t> MakeState()
 
 uint32_t TestRate(uint32_t dac_rate)
 {
-    return 48681812 / (dac_rate + 1);
+    return kNtscVideoClock / (dac_rate + 1);
 }
 
 int16_t TestLeft(const TestTrack& track, uint64_t frame)
@@ -354,12 +331,9 @@ int16_t TestRight(const TestTrack& track, uint64_t frame)
 std::vector<uint8_t> MakeTestLibrary(const xsflib::psf::Tags& tags)
 {
     // The ROM section is in LE word order: console byte A is at A XOR 3.
-    const std::vector<uint8_t> rom = MakeRom();
+    const std::vector<uint8_t> rom = TestRom(kRomSize);
     std::vector<uint8_t> words(rom.size());
-    for (size_t i = 0; i < rom.size(); i++)
-    {
-        words[i ^ 3] = rom[i];
-    }
+    usf::n64::CopyToLeWords(rom.data(), words.data(), rom.size());
 
     usf::Sections sections;
     sections.rom = std::vector<usf::Chunk>{{0, words}};
@@ -380,7 +354,7 @@ std::vector<uint8_t> MakeTestMini(const TestTrack& track, const xsflib::psf::Tag
     }
 
     usf::Sections sections;
-    sections.state = std::vector<usf::Chunk>{{kStateRdram + kParameters, block}};
+    sections.state = std::vector<usf::Chunk>{{usf::n64::kStateRdramOffset + kParameters, block}};
 
     return usf::WriteUsf(sections, tags);
 }

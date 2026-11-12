@@ -8,6 +8,8 @@
 
 #include "xsflib/bytes.h"
 
+#include "n64/save_state.h"
+
 namespace usf
 {
 
@@ -15,7 +17,9 @@ n64::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, b
 {
     n64::Options options;
     options.timing = n64::Timing::kLegacy;
-    options.rdram_size = state.size() >= 8 ? xsflib::LoadLe32(state.data() + 4) : n64::kRdramSize4;
+    options.rdram_size = state.size() >= n64::kStateRdramSizeOffset + 4
+                             ? xsflib::LoadLe32(state.data() + n64::kStateRdramSizeOffset)
+                             : n64::kRdramSize4;
     options.timer_interrupt = enable_compare;
     options.ai_delay = enable_fifo_full;
     options.rcp_delays = enable_compare && enable_fifo_full;

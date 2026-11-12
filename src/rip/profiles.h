@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// The profiles of the supported games. Each game's profile is made by a function in src/rip/games, declared in
-// games.h there and listed in profiles.cpp.
+// The profiles of the supported games. Each game's profile is made by a function in src/rip/games, declared in games.h
+// there and listed in profiles.cpp.
 
 #pragma once
 

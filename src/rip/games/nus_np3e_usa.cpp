@@ -18,14 +18,14 @@
 //   a1. The state of sequence player 0's script is at 0x8011F374.
 
 #include <array>
-#include <cstdio>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -53,8 +53,8 @@ constexpr uint32_t kDriverAddress = 0x803FF000;
 // The game's music function takes a number and plays the sequence 0x27 higher. Its debug menu has a music room with
 // numbers 1 to 0x61. Sequence 0x81 repeats 0x28, and sequences 0x82 and 0x84 repeat 0x7B. The lower sequences make no
 // sound alone.
-constexpr int kFirstSequence = 0x27;
-constexpr int kMusicNumbers = 0x62;
+constexpr uint32_t kFirstSequence = 0x27;
+constexpr uint32_t kMusicNumbers = 0x62;
 
 // The function also takes these numbers, for versions of five songs. The first three of them run faster through a
 // change of tempo. The other two mute different channels: they are the versions that the game switches to in play.
@@ -70,7 +70,7 @@ constexpr std::array kVersions = {
     Version{0x67, "Sequence 0x2E, second version"},
 };
 
-constexpr bool IsMusic(int sequence)
+constexpr bool IsMusic(uint32_t sequence)
 {
     return sequence != 0x81 && sequence != 0x82 && sequence != 0x84;
 }
@@ -111,23 +111,20 @@ GameProfile NusNp3eUsa()
     driver.start_calls.push_back({.function = kSendCommands});
     profile.driver = BuildCallDriver(driver);
 
-    profile.loop_watches.push_back(
-        {.address = kSequenceJump, .target_register = 25, .match_register = 5, .match_value = kSequenceScriptState});
+    profile.loop_watches.push_back({.address = kSequenceJump,
+                                    .target_register = mips::kT9,
+                                    .match_register = mips::kA1,
+                                    .match_value = kSequenceScriptState});
 
-    for (int number = 1; number < kMusicNumbers; number++)
+    for (uint32_t number = 1; number < kMusicNumbers; number++)
     {
-        const int sequence = number + kFirstSequence;
+        const uint32_t sequence = number + kFirstSequence;
         if (!IsMusic(sequence))
         {
             continue;
         }
 
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[32];
-        std::snprintf(name, sizeof(name), "Sequence 0x%02X", sequence);
-        track.name = name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Sequence", sequence, TitleBase::kHex)));
     }
 
     for (const Version& version : kVersions)

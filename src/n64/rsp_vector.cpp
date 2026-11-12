@@ -10,10 +10,10 @@
 #include "n64/rsp_vector.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace usf::n64
 {
-
 namespace
 {
 
@@ -38,10 +38,9 @@ constexpr uint64_t IntegerSqrt(uint64_t value)
 }
 
 // The divider's table: 16-bit fractions below an implied leading one, clamped to 0xFFFF. The first 512 entries are
-// reciprocals, for the nine bits i after the leading one of the input: (2^34 / (512 + i) + 1) / 256, with each
-// division rounded down. The last 512 entries are inverse square roots. Entry 2k + p is for the eight bits k after the
-// leading one and the parity p of the input's count of leading zeros: the square root of 2^(41 + p) / (256 + k),
-// rounded down.
+// reciprocals, for the nine bits i after the leading one of the input: (2^34 / (512 + i) + 1) / 256, with each division
+// rounded down. The last 512 entries are inverse square roots. Entry 2k + p is for the eight bits k after the leading
+// one and the parity p of the input's count of leading zeros: the square root of 2^(41 + p) / (256 + k), rounded down.
 constexpr std::array<uint16_t, 1024> MakeDivideTable()
 {
     std::array<uint16_t, 1024> table = {};
@@ -102,18 +101,6 @@ uint32_t SetBit(uint32_t value, int bit, bool set)
     return set ? value | (1u << bit) : value & ~(1u << bit);
 }
 
-int CountLeadingZeros(uint32_t value)
-{
-    int count = 0;
-    while ((value & 0x80000000u) == 0)
-    {
-        value <<= 1;
-        count++;
-    }
-
-    return count;
-}
-
 } // namespace
 
 void VectorUnit::Reset()
@@ -163,11 +150,6 @@ void VectorUnit::WriteControl(int index, uint32_t value)
     }
 }
 
-uint64_t VectorUnit::Accumulator(int lane) const
-{
-    return static_cast<uint64_t>(acc_[lane]) & 0xFFFFFFFFFFFFull;
-}
-
 VectorUnit::Vector VectorUnit::Broadcast(int reg, int element) const
 {
     if (element < 2)
@@ -209,6 +191,11 @@ uint16_t VectorUnit::AccMid(int lane) const
 uint16_t VectorUnit::AccLow(int lane) const
 {
     return static_cast<uint16_t>(acc_[lane]);
+}
+
+void VectorUnit::SetAccLow(int lane, uint16_t value)
+{
+    acc_[lane] = (acc_[lane] & ~int64_t{0xFFFF}) | value;
 }
 
 uint16_t VectorUnit::SaturateMid(int lane) const
@@ -467,7 +454,7 @@ void VectorUnit::Round(int vd, int vs_field, const Vector& vt)
             SetAcc(n, Acc(n) + addend);
         }
 
-        result[n] = ClampSigned(static_cast<int32_t>(std::clamp<int64_t>(Acc(n) >> 16, -32768, 32767)));
+        result[n] = SaturateMid(n);
     }
 
     vr_[vd] = result;
@@ -514,14 +501,14 @@ void VectorUnit::AddSubtract(int vd, int vs, const Vector& vt)
         {
             // VADD: the sum with the carry in, clamped. The accumulator keeps the low 16 bits.
             const int32_t sum = s + t + carry;
-            acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | (sum & 0xFFFF);
+            SetAccLow(n, static_cast<uint16_t>(sum));
             result[n] = ClampSigned(sum);
         }
         else if constexpr (kOp == 0x11)
         {
             // VSUB.
             const int32_t difference = s - t - carry;
-            acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | (difference & 0xFFFF);
+            SetAccLow(n, static_cast<uint16_t>(difference));
             result[n] = ClampSigned(difference);
         }
         else if constexpr (kOp == 0x13)
@@ -537,14 +524,14 @@ void VectorUnit::AddSubtract(int vd, int vs, const Vector& vt)
                 value = t;
             }
 
-            acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | (value & 0xFFFF);
+            SetAccLow(n, static_cast<uint16_t>(value));
             result[n] = value == 32768 ? 0x7FFF : static_cast<uint16_t>(value);
         }
         else if constexpr (kOp == 0x14)
         {
             // VADDC: the unsigned sum, with its carry in VCO.
             const uint32_t sum = us + ut;
-            acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | (sum & 0xFFFF);
+            SetAccLow(n, static_cast<uint16_t>(sum));
             result[n] = static_cast<uint16_t>(sum);
             vco = static_cast<uint16_t>(SetBit(vco, n, (sum >> 16) != 0));
         }
@@ -552,7 +539,7 @@ void VectorUnit::AddSubtract(int vd, int vs, const Vector& vt)
         {
             // VSUBC: the unsigned difference, with the borrow and "not equal" in VCO.
             const uint32_t difference = us - ut;
-            acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | (difference & 0xFFFF);
+            SetAccLow(n, static_cast<uint16_t>(difference));
             result[n] = static_cast<uint16_t>(difference);
             vco = static_cast<uint16_t>(SetBit(vco, n, (difference >> 16) != 0));
             vco = static_cast<uint16_t>(SetBit(vco, n + 8, difference != 0));
@@ -697,7 +684,7 @@ void VectorUnit::Select(int vd, int vs, const Vector& vt)
             result[n] = Bit(vcc_, n) ? us : ut;
         }
 
-        acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | result[n];
+        SetAccLow(n, result[n]);
     }
 
     // The compares clear VCO and the clip bits of VCC. VCL and VCR clear VCE. VMRG clears VCO.
@@ -757,7 +744,7 @@ void VectorUnit::Logical(int vd, int vs, const Vector& vt)
         }
 
         result[n] = value;
-        acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | value;
+        SetAccLow(n, value);
     }
 
     vr_[vd] = result;
@@ -769,7 +756,7 @@ void VectorUnit::Reserved(int vd, int vs, const Vector& vt)
     for (int n = 0; n < 8; n++)
     {
         const uint16_t sum = static_cast<uint16_t>(vr_[vs][n] + vt[n]);
-        acc_[n] = (acc_[n] & ~int64_t{0xFFFF}) | sum;
+        SetAccLow(n, sum);
         vr_[vd][n] = 0;
     }
 }
@@ -793,7 +780,7 @@ int32_t VectorUnit::Reciprocal(int32_t input, bool square_root) const
         return static_cast<int32_t>(0xFFFF0000u);
     }
 
-    const int shift = CountLeadingZeros(static_cast<uint32_t>(data));
+    const int shift = std::countl_zero(static_cast<uint32_t>(data));
     uint32_t index = ((static_cast<uint32_t>(data) << shift) & 0x7FC00000u) >> 22;
     int right_shift = 31 - shift;
     if (square_root)
@@ -841,7 +828,7 @@ void VectorUnit::Divide(VectorUnit& unit, int vd, int vs, int vt, int element)
 
     for (int n = 0; n < 8; n++)
     {
-        unit.acc_[n] = (unit.acc_[n] & ~int64_t{0xFFFF}) | vte[n];
+        unit.SetAccLow(n, vte[n]);
     }
 }
 

@@ -4,20 +4,11 @@
 
 #include <algorithm>
 
+#include "n64/bits.h"
 #include "usf/track.h"
 
 namespace usf::rip
 {
-
-namespace
-{
-
-uint64_t SignExtend32(uint32_t value)
-{
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(value)));
-}
-
-} // namespace
 
 TrackPlayer::TrackPlayer(std::span<const uint8_t> rom, std::span<const uint8_t> state, const PlayerOptions& options)
     : system_(TrackOptions(state, options.enable_compare, options.enable_fifo_full)),
@@ -29,7 +20,7 @@ TrackPlayer::TrackPlayer(std::span<const uint8_t> rom, std::span<const uint8_t> 
 
     for (const LoopWatch& watch : loop_watches_)
     {
-        system_.AddBreakpoint(SignExtend32(watch.address));
+        system_.AddBreakpoint(n64::SignExtend32(watch.address));
     }
 
     clock_.Start(system_.Now());
@@ -105,7 +96,7 @@ void TrackPlayer::RunSlice()
             {
                 continue;
             }
-            if (watch.count_register > 0 && (cpu.Gpr(watch.count_register) & 0xFF) != 0xFF)
+            if (watch.count_register > 0 && (cpu.Gpr(watch.count_register) & kLoopCountMask) != kForeverCount)
             {
                 continue;
             }

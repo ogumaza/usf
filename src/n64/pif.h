@@ -4,9 +4,9 @@
 // The PIF ROM isn't emulated. System::Boot (boot.cpp) leaves the state that the ROM's code would leave.
 //
 // By default nothing is connected, as in the existing USF players. Every joybus command then comes back with the "no
-// device" bit (0x80) in its receive-length byte. A standard controller can be connected to each of the four ports,
-// and an EEPROM of 4 or 16 Kbit to the cartridge's channel. The replies follow n64brew's pages on the joybus protocol
-// and the PIF.
+// device" bit (0x80) in its receive-length byte. A standard controller can be connected to each of the four ports, and
+// an EEPROM of 4 or 16 Kbit to the cartridge's channel. The replies follow n64brew's pages on the joybus protocol and
+// the PIF.
 
 #pragma once
 
@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+
+#include "n64/constants.h"
 
 namespace usf::n64
 {
@@ -73,14 +75,16 @@ enum class EepromType
 class Pif
 {
 public:
+    // The controller ports, and the joybus channels: one for each port, then one for the cartridge.
     static constexpr int kPorts = 4;
+    static constexpr int kChannels = 5;
 
     // Clears the RAM and the joybus configuration. The connected devices, their states, the EEPROM's contents and the
     // input script stay. The script starts again from its first event.
     void Reset();
 
-    std::array<uint8_t, 64>& Ram();
-    const std::array<uint8_t, 64>& Ram() const;
+    std::array<uint8_t, kPifRamSize>& Ram();
+    const std::array<uint8_t, kPifRamSize>& Ram() const;
 
     // Called after a save state has restored the RAM. A state holds no joybus configuration, so the frame in the RAM
     // becomes the last configuration. libultra sets the command byte's configure bit only when it rebuilds a frame.
@@ -95,14 +99,12 @@ public:
 
     // Controllers. A port is 0 to 3. A controller holds no accessory.
     void ConnectController(int port, bool connected);
-    bool ControllerConnected(int port) const;
     void SetController(int port, const ControllerState& state);
     const ControllerState& Controller(int port) const;
 
-    // Adds an event to the input script. Events take effect in the order they were added, each at the first joybus
-    // run at or after its time. An event never takes effect before the one added ahead of it.
+    // Adds an event to the input script. Events take effect in the order they were added, each at the first joybus run
+    // at or after its time. An event never takes effect before the one added ahead of it.
     void AddInput(const InputEvent& event);
-    void ClearInput();
 
     // The EEPROM on the cartridge's channel. Setting the type clears the contents to 0xFF. A write takes effect at
     // once, and the EEPROM never reports itself busy.
@@ -122,8 +124,8 @@ private:
     int ControllerCommand(int port, std::span<const uint8_t> command, std::span<uint8_t> reply);
     int EepromCommand(std::span<const uint8_t> command, std::span<uint8_t> reply);
 
-    std::array<uint8_t, 64> ram_{};
-    std::array<int, 5> channel_offsets_{}; // Where each channel's command starts, or -1.
+    std::array<uint8_t, kPifRamSize> ram_{};
+    std::array<int, kChannels> channel_offsets_{}; // Where each channel's command starts, or -1.
     bool configured_ = false;
 
     std::array<bool, kPorts> connected_{};

@@ -11,8 +11,8 @@
 //   sequence 0x28, so the set leaves it out. Sequences 0x01 and 0x6D hold ambience and cutscene effects. They stay
 //   silent until the game's code sets their ports, so the set leaves them out too.
 // - The function at 0x800CB2B0 takes a 32-bit command in a0 and queues it for the audio update. Command 0x000000NN
-//   starts sequence NN on sequence player 0. Command 0xE0000000 sets stereo output. Command 0xF00000NN resets the
-//   sound engine to audio set-up NN.
+//   starts sequence NN on sequence player 0. Command 0xE0000000 sets stereo output. Command 0xF00000NN resets the sound
+//   engine to audio set-up NN.
 // - The game thread (entry 0x800A2014) calls the frame function at 0x800A1D68 once a frame. That function ends with a
 //   call of the audio update at 0x800C4490, which reads the queue. Gameplay has a frame of three video fields.
 // - The snapshot takes over the game thread at the frame function's first call. Audio buffers start soon after. The
@@ -42,8 +42,6 @@
 // Sequence 0x02 picks each part of Hyrule Field's music as it plays. It has no loop, so the length analysis stops it at
 // its limit of 10 minutes.
 
-#include <algorithm>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -53,7 +51,6 @@
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -224,19 +221,6 @@ constexpr CommandVersion kCommandVersions[] = {
     {0x57, 0x70070001, "Sequence 0x28: file select, without the harp's introduction"},
 };
 
-// The patch that replaces the one word of the driver's code that holds `word`.
-RdramPatch DriverWordPatch(const Driver& driver, uint32_t word, uint32_t replacement)
-{
-    const auto found = std::ranges::find(driver.code, word);
-    if (found == driver.code.end() || std::find(found + 1, driver.code.end(), word) != driver.code.end())
-    {
-        throw std::logic_error("Ocarina of Time's driver doesn't hold a word of Ganon's Tower's call exactly once");
-    }
-
-    return {.address = driver.address + static_cast<uint32_t>(4 * (found - driver.code.begin())),
-            .words = {replacement}};
-}
-
 std::vector<RdramPatch> CommandVersionPatches(const Driver& driver, const CommandVersion& version)
 {
     return {DriverWordPatch(driver, mips::Addiu(mips::kT0, mips::kZero, kGanonsTower),
@@ -311,8 +295,10 @@ GameProfile NusCzleUsaRev2()
     driver.fields = 3;
     profile.driver = BuildCallDriver(driver);
 
-    profile.loop_watches.push_back(
-        {.address = kSequenceJump, .target_register = 10, .match_register = 5, .match_value = kSequenceScriptState});
+    profile.loop_watches.push_back({.address = kSequenceJump,
+                                    .target_register = mips::kT2,
+                                    .match_register = mips::kA1,
+                                    .match_value = kSequenceScriptState});
 
     for (const Title& title : kTitles)
     {

@@ -5,8 +5,8 @@
 // Arithmetic runs on the host's IEEE 754 hardware in the rounding mode that FCR31 selects, and the host's exception
 // flags give the cause bits. The VR4300 leaves some cases to software: a subnormal or quiet NaN operand, a subnormal
 // result while FS is clear, and conversions out of range. Each raises the unimplemented operation exception. The
-// VR4300's NaNs follow the old MIPS convention: a NaN with the top bit of its fraction set is signaling. Every NaN
-// that an operation produces is the default NaN.
+// VR4300's NaNs follow the old MIPS convention: a NaN with the top bit of its fraction set is signaling. Every NaN that
+// an operation produces is the default NaN.
 //
 // This file must be compiled with strict floating-point semantics, so that the compiler keeps each operation between
 // the calls that set the rounding mode and read the flags.
@@ -17,12 +17,12 @@
 #include <cstdint>
 #include <limits>
 
+#include "n64/bits.h"
 #include "n64/cpu.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
 
@@ -37,17 +37,25 @@ constexpr uint32_t kUnimplemented = 1u << 5;
 constexpr int kFlagShift = 2;
 constexpr int kEnableShift = 7;
 constexpr int kCauseShift = 12;
-constexpr uint32_t kCauseField = 0x3Fu << kCauseShift;
-constexpr uint32_t kCondition = 1u << 23;
+constexpr uint32_t kExceptionBits = 0x1F;
+constexpr uint32_t kCauseBits = kExceptionBits | kUnimplemented;
+constexpr uint32_t kCauseField = kCauseBits << kCauseShift;
 constexpr uint32_t kFlushSubnormals = 1u << 24;
-constexpr uint32_t kFcr31WriteMask = 0x0183FFFF;
-constexpr uint32_t kFcr0 = 0x00000A00;
 
 // FCR31's rounding modes.
 constexpr int kRoundNearest = 0;
 constexpr int kRoundZero = 1;
 constexpr int kRoundUp = 2;
 constexpr int kRoundDown = 3;
+constexpr uint32_t kRoundingModeMask = 3;
+
+// The powers of two that bound the conversions to integers.
+constexpr double kTwoTo31 = 2147483648.0;
+constexpr double kTwoTo53 = 9007199254740992.0;
+constexpr double kTwoTo63 = 9223372036854775808.0;
+
+// The doublewords that the hardware converts to a float: below 2^55 in magnitude.
+constexpr int64_t kTwoTo55 = int64_t{1} << 55;
 
 template <typename T>
 struct FloatFormat;
@@ -203,11 +211,6 @@ uint64_t ToRaw(T value)
     return static_cast<uint64_t>(std::bit_cast<typename FloatFormat<T>::Bits>(value));
 }
 
-uint64_t SignExtend32(uint32_t value)
-{
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(value)));
-}
-
 } // namespace
 
 uint64_t Cpu::Fpr(int index) const
@@ -288,12 +291,7 @@ void Cpu::MoveToFpr64(int index, uint64_t value)
 
 uint32_t Cpu::SourceSingle(int index) const
 {
-    return static_cast<uint32_t>((status_ & kStatusFr) != 0 ? fpr_[index] : fpr_[index & ~1]);
-}
-
-uint64_t Cpu::SourceDouble(int index) const
-{
-    return (status_ & kStatusFr) != 0 ? fpr_[index] : fpr_[index & ~1];
+    return static_cast<uint32_t>(MoveFromFpr64(index));
 }
 
 void Cpu::WriteFcr31(uint32_t value)
@@ -301,14 +299,14 @@ void Cpu::WriteFcr31(uint32_t value)
     if (!FpuTraps())
     {
         fcr31_ = value;
-        legacy_rounding_ = static_cast<int>(value & 3);
+        legacy_rounding_ = static_cast<int>(value & kRoundingModeMask);
         return;
     }
 
     fcr31_ = value & kFcr31WriteMask;
-    const uint32_t cause = (fcr31_ >> kCauseShift) & 0x3F;
-    const uint32_t enabled = ((fcr31_ >> kEnableShift) & 0x1F) | kUnimplemented;
-    if ((cause & enabled) != 0 && FpuTraps())
+    const uint32_t cause = (fcr31_ >> kCauseShift) & kCauseBits;
+    const uint32_t enabled = ((fcr31_ >> kEnableShift) & kExceptionBits) | kUnimplemented;
+    if ((cause & enabled) != 0)
     {
         RaiseException(ExceptionCode::kFloatingPoint);
     }
@@ -336,7 +334,7 @@ bool Cpu::FpuTraps() const
 
 int Cpu::FpuRounding() const
 {
-    return FpuTraps() ? static_cast<int>(fcr31_ & 3) : legacy_rounding_;
+    return FpuTraps() ? static_cast<int>(fcr31_ & kRoundingModeMask) : legacy_rounding_;
 }
 
 bool Cpu::FpuUnimplemented()
@@ -361,7 +359,7 @@ bool Cpu::FpuSignal(uint32_t exceptions)
         return true;
     }
 
-    const uint32_t enabled = (fcr31_ >> kEnableShift) & exceptions & 0x1F;
+    const uint32_t enabled = (fcr31_ >> kEnableShift) & exceptions & kExceptionBits;
     fcr31_ |= exceptions << kCauseShift;
     fcr31_ |= (exceptions & ~enabled) << kFlagShift;
     if (enabled != 0)
@@ -410,17 +408,13 @@ bool Cpu::FpuSubnormalTraps() const
     return (fcr31_ & kFlushSubnormals) == 0 || enables != 0;
 }
 
-bool Cpu::FpuCheckHostFlags(int host_flags, bool conversion)
+bool Cpu::FpuCheckHostFlags(int host_flags)
 {
     if (host_flags == 0)
     {
         return true;
     }
-    if (conversion && (host_flags & FE_INVALID) != 0)
-    {
-        return FpuUnimplemented();
-    }
-    if ((host_flags & FE_UNDERFLOW) != 0 && FpuSubnormalTraps() && FpuTraps())
+    if ((host_flags & FE_UNDERFLOW) != 0 && FpuSubnormalTraps())
     {
         return FpuUnimplemented();
     }
@@ -470,7 +464,7 @@ bool Cpu::FpuCheckOutput(T& value)
         // zero.
         FpuSignal(kUnderflow | kInexact);
         const bool negative = std::signbit(value);
-        switch (fcr31_ & 3)
+        switch (fcr31_ & kRoundingModeMask)
         {
         case kRoundUp:
             value = negative ? -T(0) : std::numeric_limits<T>::min();
@@ -521,11 +515,11 @@ void Cpu::FpuCompare(uint32_t condition, T a, T b)
 
     if (result)
     {
-        fcr31_ |= kCondition;
+        fcr31_ |= kFcr31Condition;
     }
     else
     {
-        fcr31_ &= ~kCondition;
+        fcr31_ &= ~kFcr31Condition;
     }
 }
 
@@ -535,10 +529,10 @@ void Cpu::FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, in
     const int fd = static_cast<int>(Sa(instruction));
     if (!FpuTraps())
     {
-        // The legacy players convert on the host. A NaN and a value that doesn't fit give what x86 hosts give: the
-        // most negative integer.
+        // The legacy players convert on the host. A NaN and a value that doesn't fit give what x86 hosts give: the most
+        // negative integer.
         const T rounded = RoundIntegral(value, rounding);
-        const T limit = doubleword ? T(9223372036854775808.0) : T(2147483648.0);
+        const T limit = doubleword ? T(kTwoTo63) : T(kTwoTo31);
         const bool fits = !IsNan(value) && rounded < limit && rounded >= -limit;
         if (doubleword)
         {
@@ -561,8 +555,7 @@ void Cpu::FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, in
     // Values that the hardware can't convert: beyond 32 bits for a word, and 53 bits for a doubleword.
     if (doubleword)
     {
-        const T limit = T(9007199254740992.0);
-        if (value >= limit || value <= -limit)
+        if (value >= T(kTwoTo53) || value <= -T(kTwoTo53))
         {
             FpuUnimplemented();
             return;
@@ -570,8 +563,7 @@ void Cpu::FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, in
     }
     else
     {
-        const T limit = T(2147483648.0);
-        if (value >= limit || value < -limit)
+        if (value >= T(kTwoTo31) || value < -T(kTwoTo31))
         {
             FpuUnimplemented();
             return;
@@ -579,7 +571,7 @@ void Cpu::FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, in
     }
 
     const T rounded = RoundIntegral(value, rounding);
-    if (!doubleword && (rounded >= T(2147483648.0) || rounded < T(-2147483648.0)))
+    if (!doubleword && (rounded >= T(kTwoTo31) || rounded < -T(kTwoTo31)))
     {
         FpuUnimplemented();
         return;
@@ -599,6 +591,17 @@ void Cpu::FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, in
     }
 }
 
+template <typename R, typename S>
+void Cpu::ConvertAndWrite(S value, int fd, int mode)
+{
+    int flags = 0;
+    R result = HostCompute<R>(FpuTraps(), mode, flags, [value] { return static_cast<R>(value); });
+    if (FpuCheckHostFlags(flags) && FpuCheckOutput(result))
+    {
+        fpr_[fd] = ToRaw(result);
+    }
+}
+
 template <typename T>
 void Cpu::ExecuteFpuFormat(uint32_t instruction)
 {
@@ -610,17 +613,13 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
     constexpr bool kSingle = sizeof(T) == 4;
 
     // fs comes from the even register of a pair when FR is clear. ft and fd are the registers named.
-    auto source = [this](int index)
+    const auto source = [this](int index)
     {
-        return ToFloat<T>(kSingle ? SourceSingle(index) : SourceDouble(index));
+        return ToFloat<T>(kSingle ? SourceSingle(index) : MoveFromFpr64(index));
     };
-    auto target = [this](int index)
+    const auto target = [this](int index)
     {
         return ToFloat<T>(kSingle ? static_cast<uint32_t>(fpr_[index]) : fpr_[index]);
-    };
-    auto write = [this, fd](auto result)
-    {
-        fpr_[fd] = ToRaw(result);
     };
 
     if (funct == 0x06)
@@ -628,7 +627,7 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
         // MOV copies the raw 64 bits and changes no cause bits.
         if (RequireCop1())
         {
-            fpr_[fd] = SourceDouble(fs);
+            fpr_[fd] = MoveFromFpr64(fs);
         }
 
         return;
@@ -639,69 +638,17 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
         return;
     }
 
-    int flags = 0;
     switch (funct)
     {
     case 0x00:
     case 0x01:
     case 0x02:
     case 0x03:
-        {
-            const T a = source(fs);
-            const T b = target(ft);
-            if (!FpuCheckInputs(a, b))
-            {
-                return;
-            }
-
-            T result = HostCompute<T>(FpuTraps(), mode, flags,
-                                      [a, b, funct]
-                                      {
-                                          switch (funct)
-                                          {
-                                          case 0x00:
-                                              return a + b;
-                                          case 0x01:
-                                              return a - b;
-                                          case 0x02:
-                                              return a * b;
-                                          default:
-                                              return a / b;
-                                          }
-                                      });
-            if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
-            {
-                write(result);
-            }
-            return;
-        }
-
     case 0x04:
     case 0x05:
     case 0x07:
-        {
-            const T a = source(fs);
-            if (!FpuCheckInput(a))
-            {
-                return;
-            }
-
-            T result = HostCompute<T>(FpuTraps(), mode, flags,
-                                      [a, funct]
-                                      {
-                                          if (funct == 0x04)
-                                          {
-                                              return std::sqrt(a);
-                                          }
-
-                                          return funct == 0x05 ? std::fabs(a) : -a;
-                                      });
-            if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
-            {
-                write(result);
-            }
-            return;
-        }
+        FpuArithmetic(funct, source(fs), target(ft), fd, mode);
+        return;
 
     case 0x08:
     case 0x09:
@@ -737,19 +684,11 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
 
             if (to_single)
             {
-                float result = HostCompute<float>(FpuTraps(), mode, flags, [a] { return static_cast<float>(a); });
-                if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
-                {
-                    write(result);
-                }
+                ConvertAndWrite<float>(a, fd, mode);
             }
             else
             {
-                double result = HostCompute<double>(FpuTraps(), mode, flags, [a] { return static_cast<double>(a); });
-                if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
-                {
-                    write(result);
-                }
+                ConvertAndWrite<double>(a, fd, mode);
             }
             return;
         }
@@ -758,7 +697,7 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
     case 0x25:
         // CVT.W and CVT.L. The legacy players take the rounding mode of these two from FCR31 itself, even before the
         // game writes FCR31.
-        FpuConvertToInteger(instruction, source(fs), funct == 0x25, static_cast<int>(fcr31_ & 3));
+        FpuConvertToInteger(instruction, source(fs), funct == 0x25, static_cast<int>(fcr31_ & kRoundingModeMask));
         return;
 
     default:
@@ -770,6 +709,43 @@ void Cpu::ExecuteFpuFormat(uint32_t instruction)
 
         FpuUnimplemented();
         return;
+    }
+}
+
+template <typename T>
+void Cpu::FpuArithmetic(uint32_t funct, T a, T b, int fd, int mode)
+{
+    // ADD, SUB, MUL and DIV check both operands. SQRT, ABS and NEG check `a` alone.
+    if (funct <= 0x03 ? !FpuCheckInputs(a, b) : !FpuCheckInput(a))
+    {
+        return;
+    }
+
+    int flags = 0;
+    const auto operation = [a, b, funct]
+    {
+        switch (funct)
+        {
+        case 0x00:
+            return a + b;
+        case 0x01:
+            return a - b;
+        case 0x02:
+            return a * b;
+        case 0x03:
+            return a / b;
+        case 0x04:
+            return std::sqrt(a);
+        case 0x05:
+            return std::fabs(a);
+        default:
+            return -a;
+        }
+    };
+    T result = HostCompute<T>(FpuTraps(), mode, flags, operation);
+    if (FpuCheckHostFlags(flags) && FpuCheckOutput(result))
+    {
+        fpr_[fd] = ToRaw(result);
     }
 }
 
@@ -791,100 +767,95 @@ void Cpu::ExecuteFpuInteger(uint32_t instruction, bool doubleword)
     }
 
     // CVT.S and CVT.D from a word or a doubleword. Doublewords beyond 55 bits are left to software.
-    const int64_t value = doubleword ? static_cast<int64_t>(SourceDouble(fs))
+    const int64_t value = doubleword ? static_cast<int64_t>(MoveFromFpr64(fs))
                                      : static_cast<int64_t>(static_cast<int32_t>(SourceSingle(fs)));
-    if (doubleword && (value >= (int64_t{1} << 55) || value < -(int64_t{1} << 55)) && !FpuUnimplemented())
+    if (doubleword && (value >= kTwoTo55 || value < -kTwoTo55) && !FpuUnimplemented())
     {
         return;
     }
 
-    int flags = 0;
     if (funct == 0x20)
     {
-        float result = HostCompute<float>(FpuTraps(), mode, flags, [value] { return static_cast<float>(value); });
-        if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
-        {
-            fpr_[fd] = ToRaw(result);
-        }
+        ConvertAndWrite<float>(value, fd, mode);
     }
     else
     {
-        double result = HostCompute<double>(FpuTraps(), mode, flags, [value] { return static_cast<double>(value); });
-        if (FpuCheckHostFlags(flags, false) && FpuCheckOutput(result))
+        ConvertAndWrite<double>(value, fd, mode);
+    }
+}
+
+void Cpu::ExecuteCop1LoadStore(uint32_t instruction)
+{
+    // LWC1, LDC1, SWC1 and SDC1.
+    if (!RequireCop1())
+    {
+        return;
+    }
+
+    const uint64_t vaddr = gpr_[Rs(instruction)] + SignedImmediate(instruction);
+    const int ft = static_cast<int>(Rt(instruction));
+    switch (instruction >> 26)
+    {
+    case 0x31:
         {
-            fpr_[fd] = ToRaw(result);
+            uint32_t value = 0;
+            if (Load(vaddr, value))
+            {
+                MoveToFpr32(ft, value);
+            }
+            break;
         }
+
+    case 0x35:
+        {
+            uint64_t value = 0;
+            if (Load(vaddr, value))
+            {
+                MoveToFpr64(ft, value);
+            }
+            break;
+        }
+
+    case 0x39:
+        Store<uint32_t>(vaddr, MoveFromFpr32(ft));
+        break;
+
+    default:
+        Store<uint64_t>(vaddr, MoveFromFpr64(ft));
+        break;
     }
 }
 
 void Cpu::ExecuteCop1(uint32_t instruction)
 {
-    const uint32_t op = instruction >> 26;
-    const uint32_t rt = Rt(instruction);
-    if (op != 0x11)
+    if ((instruction >> 26) != 0x11)
     {
-        // LWC1, LDC1, SWC1 and SDC1.
-        if (!RequireCop1())
-        {
-            return;
-        }
-
-        const uint64_t vaddr = gpr_[Rs(instruction)] + SignedImmediate(instruction);
-        const int ft = static_cast<int>(rt);
-        switch (op)
-        {
-        case 0x31:
-            {
-                uint32_t value = 0;
-                if (Load(vaddr, value))
-                {
-                    MoveToFpr32(ft, value);
-                }
-                break;
-            }
-
-        case 0x35:
-            {
-                uint64_t value = 0;
-                if (Load(vaddr, value))
-                {
-                    MoveToFpr64(ft, value);
-                }
-                break;
-            }
-
-        case 0x39:
-            Store<uint32_t>(vaddr, MoveFromFpr32(ft));
-            break;
-
-        default:
-            Store<uint64_t>(vaddr, MoveFromFpr64(ft));
-            break;
-        }
-
+        ExecuteCop1LoadStore(instruction);
         return;
     }
 
     const uint32_t rs = Rs(instruction);
+    const uint32_t rt = Rt(instruction);
     const int fs = static_cast<int>(Rd(instruction));
+
+    // MFC1, DMFC1, CFC1, MTC1, DMTC1 and CTC1 require COP1 to be usable.
+    const bool move = rs <= 0x06 && rs != 0x03;
+    if (move && !RequireCop1())
+    {
+        return;
+    }
+
     switch (rs)
     {
     case 0x00:
-        if (RequireCop1())
-        {
-            gpr_[rt] = SignExtend32(MoveFromFpr32(fs));
-        }
+        gpr_[rt] = SignExtend32(MoveFromFpr32(fs));
         return;
 
     case 0x01:
-        if (RequireCop1())
-        {
-            gpr_[rt] = MoveFromFpr64(fs);
-        }
+        gpr_[rt] = MoveFromFpr64(fs);
         return;
 
     case 0x02:
-        if (RequireCop1())
         {
             uint32_t value = 0;
             if (fs == 0)
@@ -897,25 +868,20 @@ void Cpu::ExecuteCop1(uint32_t instruction)
             }
 
             gpr_[rt] = SignExtend32(value);
+            return;
         }
-        return;
 
     case 0x04:
-        if (RequireCop1())
-        {
-            MoveToFpr32(fs, static_cast<uint32_t>(gpr_[rt]));
-        }
+        MoveToFpr32(fs, static_cast<uint32_t>(gpr_[rt]));
         return;
 
     case 0x05:
-        if (RequireCop1())
-        {
-            MoveToFpr64(fs, gpr_[rt]);
-        }
+        MoveToFpr64(fs, gpr_[rt]);
         return;
 
     case 0x06:
-        if (RequireCop1() && fs == 31)
+        // CTC1 writes only FCR31.
+        if (fs == 31)
         {
             WriteFcr31(static_cast<uint32_t>(gpr_[rt]));
         }
@@ -934,7 +900,7 @@ void Cpu::ExecuteCop1(uint32_t instruction)
                 return;
             }
 
-            const bool condition = (fcr31_ & kCondition) != 0;
+            const bool condition = (fcr31_ & kFcr31Condition) != 0;
             const bool taken = condition == ((rt & 1) != 0);
             if ((rt & 2) != 0)
             {

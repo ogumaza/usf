@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <deque>
 #include <span>
@@ -73,6 +72,7 @@ private:
 
     // Runs the core until it has queued at least `frames` frames.
     void Fill(uint64_t frames);
+
     void RunSlice();
     void Queue(std::span<const int16_t> samples, uint32_t rate);
 
@@ -81,6 +81,7 @@ private:
 
     // Frames waiting to be rendered, each with its rate.
     std::deque<Frame> queue_;
+
     uint64_t produced_ = 0; // Frames queued so far, rendered or not.
     uint64_t rendered_ = 0;
     uint32_t rate_ = 0;
@@ -90,8 +91,8 @@ private:
     std::vector<LoopEvent> loops_;
 };
 
-// SHA-256 hashes of a render's samples, one for each block of kBlockFrames stereo frames. Two renders are the same
-// over their first N frames when their hashes of the blocks that start before N are the same.
+// SHA-256 hashes of a render's samples, one for each block of kBlockFrames stereo frames. Two renders are the same over
+// their first N frames when their hashes of the blocks that start before N are the same.
 class SampleHashes
 {
 public:

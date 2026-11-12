@@ -13,13 +13,20 @@
 
 #include "xsflib/bytes.h"
 
+#include "n64/bits.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
+
+// The panel's word: the row select in bits 8 to 15 and the row's keys in bits 16 to 23. The other bits read 1. The keys
+// are active low.
+constexpr int kPanelSelectShift = 8;
+constexpr uint32_t kPanelSelectMask = 0xFF;
+constexpr int kPanelRowShift = 16;
+constexpr uint32_t kPanelIdleBits = 0xFF00FFFF;
 
 // Where `paddr` falls in a block of `size` bytes at `base`, or `size` when it falls outside.
 uint32_t OffsetIn(uint32_t paddr, uint32_t base, uint32_t size)
@@ -34,11 +41,7 @@ void StoreBytes(std::vector<uint8_t>& memory, uint32_t offset, uint64_t value, i
         return;
     }
 
-    for (int i = size - 1; i >= 0; i--)
-    {
-        memory[offset + static_cast<uint32_t>(i)] = static_cast<uint8_t>(value);
-        value >>= 8;
-    }
+    StoreBe(memory.data() + offset, value, size);
 }
 
 } // namespace
@@ -78,29 +81,45 @@ void System::ResetBoard()
     }
 }
 
+std::vector<uint8_t>* System::BoardMemory(uint32_t paddr, uint32_t& offset)
+{
+    offset = OffsetIn(paddr, kAleck64Ram, kAleck64RamSize);
+    if (offset < kAleck64RamSize)
+    {
+        return &board_.ram;
+    }
+    if (options_.board != Board::kAleck64E90)
+    {
+        return nullptr;
+    }
+
+    offset = OffsetIn(paddr, kAleck64Tiles, kAleck64VideoMemorySize);
+    if (offset < kAleck64VideoMemorySize)
+    {
+        return &board_.tiles;
+    }
+
+    offset = OffsetIn(paddr, kAleck64Palette, kAleck64VideoMemorySize);
+    if (offset < kAleck64VideoMemorySize)
+    {
+        return &board_.palette;
+    }
+
+    return nullptr;
+}
+
 uint32_t System::ReadBoard32(uint32_t paddr)
 {
     paddr &= ~3u;
-    if (const uint32_t offset = OffsetIn(paddr, kAleck64Ram, kAleck64RamSize); offset < kAleck64RamSize)
-    {
-        return xsflib::LoadBe32(board_.ram.data() + offset);
-    }
     if (OffsetIn(paddr, kAleck64Inputs, kAleck64InputsSize) < kAleck64InputsSize)
     {
         return ReadBoardInputs(paddr);
     }
-    if (options_.board == Board::kAleck64E90)
+
+    uint32_t offset = 0;
+    if (const std::vector<uint8_t>* memory = BoardMemory(paddr, offset))
     {
-        if (const uint32_t offset = OffsetIn(paddr, kAleck64Tiles, kAleck64VideoMemorySize);
-            offset < kAleck64VideoMemorySize)
-        {
-            return xsflib::LoadBe32(board_.tiles.data() + offset);
-        }
-        if (const uint32_t offset = OffsetIn(paddr, kAleck64Palette, kAleck64VideoMemorySize);
-            offset < kAleck64VideoMemorySize)
-        {
-            return xsflib::LoadBe32(board_.palette.data() + offset);
-        }
+        return xsflib::LoadBe32(memory->data() + offset);
     }
 
     return 0;
@@ -119,8 +138,10 @@ uint32_t System::ReadBoardInputs(uint32_t paddr)
     {
     case kAleck64Switches:
         return inputs.switches;
+
     case kAleck64System:
         return inputs.system;
+
     case kAleck64Panel:
         if (inputs.panel)
         {
@@ -128,12 +149,13 @@ uint32_t System::ReadBoardInputs(uint32_t paddr)
             {
                 if (board_.panel_select == 1u << row)
                 {
-                    return 0xFF00FFFFu | (uint32_t{inputs.rows[row]} << 16);
+                    return kPanelIdleBits | (uint32_t{inputs.rows[row]} << kPanelRowShift);
                 }
             }
         }
 
         return 0;
+
     default:
         return 0;
     }
@@ -141,34 +163,21 @@ uint32_t System::ReadBoardInputs(uint32_t paddr)
 
 void System::WriteBoard(uint32_t paddr, uint64_t value, int size)
 {
-    if (const uint32_t offset = OffsetIn(paddr, kAleck64Ram, kAleck64RamSize); offset < kAleck64RamSize)
-    {
-        StoreBytes(board_.ram, offset, value, size);
-        return;
-    }
     if (OffsetIn(paddr, kAleck64Inputs, kAleck64InputsSize) < kAleck64InputsSize)
     {
         // Only the panel's row select takes a write. The game writes it as a word.
         if ((paddr & ~3u) == kAleck64Panel && size == 4)
         {
-            board_.panel_select = (static_cast<uint32_t>(value) >> 8) & 0xFF;
+            board_.panel_select = (static_cast<uint32_t>(value) >> kPanelSelectShift) & kPanelSelectMask;
         }
 
         return;
     }
-    if (options_.board == Board::kAleck64E90)
+
+    uint32_t offset = 0;
+    if (std::vector<uint8_t>* memory = BoardMemory(paddr, offset))
     {
-        if (const uint32_t offset = OffsetIn(paddr, kAleck64Tiles, kAleck64VideoMemorySize);
-            offset < kAleck64VideoMemorySize)
-        {
-            StoreBytes(board_.tiles, offset, value, size);
-            return;
-        }
-        if (const uint32_t offset = OffsetIn(paddr, kAleck64Palette, kAleck64VideoMemorySize);
-            offset < kAleck64VideoMemorySize)
-        {
-            StoreBytes(board_.palette, offset, value, size);
-        }
+        StoreBytes(*memory, offset, value, size);
     }
 }
 

@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: MIT
 
-// The system's clock, its events, its buses and its API. The devices are in rcp.cpp, boot in boot.cpp and save
-// states in save_state.cpp.
+// The system's clock, its events, its buses and its API. The devices are in rcp.cpp, boot in boot.cpp and save states
+// in save_state.cpp.
 
 #include "n64/system.h"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "xsflib/bytes.h"
 
+#include "n64/bits.h"
+
 namespace usf::n64
 {
-
 namespace
 {
 
@@ -22,8 +24,27 @@ constexpr uint64_t kRspSliceTicks = 96;
 // How long a write to cartridge space stays in the PI's latch, with the hardware's timing.
 constexpr uint64_t kCartWriteLatchTicks = 200;
 
-// The header's country codes for PAL games.
-bool IsPalCountry(uint8_t code)
+// With the legacy timing, the most cycles that an RSP task runs for when the CPU starts it.
+constexpr uint64_t kLegacyTaskBudget = 200'000'000;
+
+// Where the task header keeps the task's type in DMEM, and the types of a graphics task and an audio task.
+constexpr uint32_t kTaskTypeOffset = 0xFC0;
+constexpr uint32_t kGraphicsTask = 1;
+constexpr uint32_t kAudioTask = 2;
+
+// How long a skipped graphics task takes: 1,000 count units.
+constexpr uint64_t kSkippedTaskTicks = 2000;
+
+// With the legacy timing, an audio task's interrupt comes 4,000 count units after the task starts.
+constexpr uint64_t kLegacyAudioInterruptTicks = 8000;
+
+// The smallest and the largest ROM image. Cartridge space has room for 256 MiB.
+constexpr uint32_t kMinRomImageSize = 0x100000;
+constexpr uint32_t kMaxRomImageSize = 0x10000000;
+
+} // namespace
+
+bool System::IsPalCountry(uint8_t code)
 {
     switch (code)
     {
@@ -41,8 +62,6 @@ bool IsPalCountry(uint8_t code)
     }
 }
 
-} // namespace
-
 bool QuietReport::Quiet() const
 {
     return !cpu_in_delay_slot && !rsp_running && !sp_interrupt_pending && !sp_dma_busy && !pi_dma_busy &&
@@ -52,7 +71,7 @@ bool QuietReport::Quiet() const
 std::string QuietReport::Describe() const
 {
     std::string text;
-    auto add = [&text](const char* part)
+    const auto add = [&text](const char* part)
     {
         if (!text.empty())
         {
@@ -130,7 +149,7 @@ void System::Reset()
     si_ = {};
     dp_ = {};
     ri_ = {};
-    rdram_noise_ = 0x2545F491;
+    rdram_noise_ = kRdramNoiseSeed;
     direct_rdram_size_ = 0;
     ResetBoard();
     pif_.Reset();
@@ -157,7 +176,7 @@ void System::Reset()
     }
 
     tv_ = TvType::kNtsc;
-    if (rom_.size() > 0x3E && IsPalCountry(rom_[0x3E]))
+    if (rom_.size() > kHeaderCountryCode && IsPalCountry(rom_[kHeaderCountryCode]))
     {
         tv_ = TvType::kPal;
     }
@@ -165,7 +184,7 @@ void System::Reset()
     StartVi();
 }
 
-void System::LoadRom(std::vector<uint8_t> rom)
+void ToConsoleOrder(std::vector<uint8_t>& rom)
 {
     // The first word of a cartridge's header is 0x80371240 in console order. The two other orders swap the bytes of
     // each halfword or reverse the bytes of each word.
@@ -185,19 +204,29 @@ void System::LoadRom(std::vector<uint8_t> rom)
             std::swap(rom[i + 1], rom[i + 2]);
         }
     }
+}
 
+uint32_t RomImageSize(uint64_t rom_size)
+{
+    uint32_t size = kMinRomImageSize;
+    while (size < rom_size && size < kMaxRomImageSize)
+    {
+        size *= 2;
+    }
+
+    return size;
+}
+
+void System::LoadRom(std::vector<uint8_t> rom)
+{
+    ToConsoleOrder(rom);
     LoadRomImage(std::move(rom));
 }
 
 void System::LoadRomImage(std::vector<uint8_t> rom)
 {
     rom_ = std::move(rom);
-    rom_image_size_ = 0x100000;
-    while (rom_image_size_ < rom_.size() && rom_image_size_ < 0x10000000)
-    {
-        rom_image_size_ *= 2;
-    }
-
+    rom_image_size_ = RomImageSize(rom_.size());
     Reset();
 }
 
@@ -220,10 +249,9 @@ void System::PatchRom(uint32_t offset, std::span<const uint8_t> bytes)
     }
 
     std::copy(bytes.begin(), bytes.end(), rom_.begin() + offset);
-
-    while (rom_image_size_ < rom_.size() && rom_image_size_ < 0x10000000)
+    if (rom_image_size_ < rom_.size())
     {
-        rom_image_size_ = std::max<uint32_t>(rom_image_size_ * 2, 0x100000);
+        rom_image_size_ = RomImageSize(rom_.size());
     }
 }
 
@@ -265,17 +293,6 @@ const Options& System::GetOptions() const
     return options_;
 }
 
-TvType System::Tv() const
-{
-    return tv_;
-}
-
-uint64_t System::NextEvent() const
-{
-    // An interrupt that waits in the queue is due at once.
-    return interrupt_event_ ? 0 : next_event_;
-}
-
 void System::LateCheck(uint64_t due)
 {
     // One check point of the legacy timing. An interrupt that waits goes first. Otherwise the first event that is due
@@ -295,7 +312,7 @@ void System::LateCheck(uint64_t due)
     }
 
     int first = -1;
-    for (int i = 0; i < static_cast<int>(Event::kCount); i++)
+    for (int i = 0; i < static_cast<int>(Event::kEventCount); i++)
     {
         if (events_[i] == kNever)
         {
@@ -392,13 +409,14 @@ void System::FireEvents()
     while (next_event_ <= now_ && !stop_)
     {
         int first = 0;
-        for (int i = 1; i < static_cast<int>(Event::kCount); i++)
+        for (int i = 1; i < static_cast<int>(Event::kEventCount); i++)
         {
             if (events_[i] < events_[first])
             {
                 first = i;
             }
         }
+
         events_[first] = kNever;
         RecomputeNextEvent();
         HandleEvent(static_cast<Event>(first));
@@ -433,7 +451,7 @@ void System::HandleEvent(Event event)
     case Event::kCountWrap:
         ScheduleCountWrap();
         break;
-    case Event::kCount:
+    case Event::kEventCount:
         break;
     }
 }
@@ -506,11 +524,6 @@ void System::Stop()
     slice_break_ = true;
 }
 
-bool System::Stopped() const
-{
-    return stop_;
-}
-
 void System::CatchUpRsp()
 {
     if (rsp_->Halted())
@@ -539,11 +552,6 @@ void System::AddBreakpoint(uint64_t vaddr)
     {
         breakpoints_.push_back(vaddr);
     }
-}
-
-void System::RemoveBreakpoint(uint64_t vaddr)
-{
-    breakpoints_.erase(std::remove(breakpoints_.begin(), breakpoints_.end(), vaddr), breakpoints_.end());
 }
 
 void System::ClearBreakpoints()
@@ -609,7 +617,7 @@ void System::LowerMi(uint32_t bits)
 
 void System::UpdateCpuInterrupt()
 {
-    cpu_->SetInterruptLine(kCauseIp2, (mi_.interrupt & mi_.mask & 0x3F) != 0);
+    cpu_->SetIp2((mi_.interrupt & mi_.mask & kMiInterruptAll) != 0);
 }
 
 // The RSP's tasks.
@@ -628,10 +636,10 @@ void System::StartRspTask()
     rsp_clock_ = now_;
     rsp_credit_ = 0;
     task_start_ = now_;
-    task_type_ = xsflib::LoadBe32(rsp_->Dmem().data() + 0xFC0);
+    task_type_ = xsflib::LoadBe32(rsp_->Dmem().data() + kTaskTypeOffset);
     sp_interrupt_deferred_ = false;
 
-    if (options_.skip_graphics_tasks && task_type_ == 1)
+    if (options_.skip_graphics_tasks && task_type_ == kGraphicsTask)
     {
         // A graphics task doesn't run. The RSP stays halted, and the task completes 1,000 count units later. Without
         // the delays, the DP's interrupt comes at once.
@@ -642,22 +650,14 @@ void System::StartRspTask()
         {
             RaiseMi(kMiInterruptDp);
         }
-        Schedule(Event::kSpTask, now_ + 2000);
+        Schedule(Event::kSpTask, now_ + kSkippedTaskTicks);
         return;
     }
 
     if (options_.timing == Timing::kLegacy)
     {
         // The legacy players run a task to completion at once.
-        uint64_t budget = 200'000'000;
-        while (!rsp_->Halted() && budget > 0)
-        {
-            budget -= rsp_->Run(std::min<uint64_t>(budget, 1'000'000));
-            if (rsp_->DmaBusy())
-            {
-                rsp_->FinishDma();
-            }
-        }
+        rsp_->Run(kLegacyTaskBudget);
         return;
     }
 
@@ -671,11 +671,11 @@ void System::OnRspBroke()
         return;
     }
 
-    if (options_.timing == Timing::kLegacy && task_type_ == 2)
+    if (options_.timing == Timing::kLegacy && task_type_ == kAudioTask)
     {
         // The legacy players raise an audio task's interrupt 4,000 count units after the task starts.
         sp_interrupt_deferred_ = true;
-        Schedule(Event::kSpTask, std::max(now_, task_start_ + 8000));
+        Schedule(Event::kSpTask, std::max(now_, task_start_ + kLegacyAudioInterruptTicks));
         return;
     }
 
@@ -798,12 +798,7 @@ void System::WriteBus(uint32_t paddr, uint64_t value, int size)
         }
         if (paddr + size <= direct_rdram_size_)
         {
-            uint8_t* p = rdram_.data() + paddr;
-            for (int i = size - 1; i >= 0; i--)
-            {
-                p[i] = static_cast<uint8_t>(value);
-                value >>= 8;
-            }
+            StoreBe(rdram_.data() + paddr, value, size);
             if (Coverage* coverage = ActiveCoverage())
             {
                 coverage->WriteRdram(paddr, static_cast<uint32_t>(size));
@@ -827,35 +822,14 @@ void System::WriteBus(uint32_t paddr, uint64_t value, int size)
     // The debug port is a buffer that takes stores of any size.
     if (!is_viewer_.empty() && paddr >= kIsViewer && paddr + size <= kIsViewer + kIsViewerSize && size < 4)
     {
-        uint8_t* p = is_viewer_.data() + (paddr - kIsViewer);
-        for (int i = size - 1; i >= 0; i--)
-        {
-            p[i] = static_cast<uint8_t>(value);
-            value >>= 8;
-        }
+        StoreBe(is_viewer_.data() + (paddr - kIsViewer), value, size);
         return;
     }
 
-    // The RCP and the PI take 32-bit writes. A smaller store shifts the whole register to its lanes and writes the
-    // low 32 bits of the result: the lanes below it get zeros, the lanes above it the register's next bytes. A
-    // doubleword store writes its upper word.
-    uint32_t word = 0;
-    switch (size)
-    {
-    case 1:
-        word = static_cast<uint32_t>(value << (8 * (3 - (paddr & 3))));
-        break;
-    case 2:
-        word = static_cast<uint32_t>(value << (8 * (2 - (paddr & 2))));
-        break;
-    case 4:
-        word = static_cast<uint32_t>(value);
-        break;
-    default:
-        word = static_cast<uint32_t>(value >> 32);
-        break;
-    }
-
+    // The RCP and the PI take 32-bit writes. A smaller store shifts the whole register to its lanes and writes the low
+    // 32 bits of the result: the lanes below it get zeros, the lanes above it the register's next bytes. A doubleword
+    // store writes its upper word.
+    const uint32_t word = BusWord(paddr, value, size);
     paddr &= ~3u;
     if (paddr < kCartDomain2Address1)
     {
@@ -864,6 +838,21 @@ void System::WriteBus(uint32_t paddr, uint64_t value, int size)
     else
     {
         WriteCart32(paddr, word);
+    }
+}
+
+uint32_t System::BusWord(uint32_t paddr, uint64_t value, int size)
+{
+    switch (size)
+    {
+    case 1:
+        return static_cast<uint32_t>(value << (8 * (3 - (paddr & 3))));
+    case 2:
+        return static_cast<uint32_t>(value << (8 * (2 - (paddr & 2))));
+    case 4:
+        return static_cast<uint32_t>(value);
+    default:
+        return static_cast<uint32_t>(value >> 32);
     }
 }
 
@@ -877,8 +866,8 @@ uint32_t System::ReadRcp32(uint32_t paddr)
     }
     if (paddr < kSpRegisters)
     {
-        const auto& memory = (paddr & 0x1000) != 0 ? rsp_->Imem() : rsp_->Dmem();
-        return xsflib::LoadBe32(memory.data() + (paddr & 0xFFC));
+        const auto& memory = rsp_->Memory(paddr);
+        return xsflib::LoadBe32(memory.data() + (paddr & Rsp::kWordAddressMask));
     }
     if (paddr < kSpPcRegister)
     {
@@ -916,7 +905,7 @@ uint32_t System::ReadRcp32(uint32_t paddr)
     {
         return ReadRi((paddr >> 2) & 7);
     }
-    if (paddr < 0x04900000)
+    if (paddr < kSiRegistersEnd)
     {
         return ReadSi((paddr >> 2) & 7);
     }
@@ -935,8 +924,8 @@ void System::WriteRcp32(uint32_t paddr, uint32_t value)
     }
     if (paddr < kSpRegisters)
     {
-        auto& memory = (paddr & 0x1000) != 0 ? rsp_->Imem() : rsp_->Dmem();
-        xsflib::StoreBe32(memory.data() + (paddr & 0xFFC), value);
+        auto& memory = rsp_->Memory(paddr);
+        xsflib::StoreBe32(memory.data() + (paddr & Rsp::kWordAddressMask), value);
         return;
     }
     if (paddr < kSpPcRegister)
@@ -990,7 +979,7 @@ void System::WriteRcp32(uint32_t paddr, uint32_t value)
         WriteRi((paddr >> 2) & 7, value);
         return;
     }
-    if (paddr < 0x04900000)
+    if (paddr < kSiRegistersEnd)
     {
         WriteSi((paddr >> 2) & 7, value);
     }
@@ -1029,11 +1018,11 @@ uint32_t System::ReadRom32(uint32_t offset)
 
 uint32_t System::ReadCart32(uint32_t paddr)
 {
-    // A direct access through the PI leaves PI_CART_ADDR just past the word it reached, as a DMA does. IPL3's last
-    // read of the header leaves 0x1000000C there.
+    // A direct access through the PI leaves PI_CART_ADDR just past the word it reached, as a DMA does. IPL3's last read
+    // of the header leaves 0x1000000C there.
     if (paddr < kPifRom)
     {
-        pi_.cart_address = (paddr + 4) & 0xFFFFFFFE;
+        pi_.cart_address = (paddr + 4) & kPiCartAddressMask;
     }
 
     // A write to cartridge space is latched, and the next read returns it.
@@ -1055,7 +1044,7 @@ uint32_t System::ReadCart32(uint32_t paddr)
         // The PIF locks its ROM before the game runs.
         return 0;
     }
-    if (!is_viewer_.empty() && paddr >= kIsViewer && paddr < kIsViewer + kIsViewerSize)
+    if (!is_viewer_.empty() && paddr >= kIsViewer && paddr + 4 <= kIsViewer + kIsViewerSize)
     {
         return xsflib::LoadBe32(is_viewer_.data() + (paddr - kIsViewer));
     }
@@ -1077,7 +1066,7 @@ void System::WriteCart32(uint32_t paddr, uint32_t value)
         pif_.OnWrite();
         return;
     }
-    if (!is_viewer_.empty() && paddr >= kIsViewer && paddr < kIsViewer + kIsViewerSize)
+    if (!is_viewer_.empty() && paddr >= kIsViewer && paddr + 4 <= kIsViewer + kIsViewerSize)
     {
         WriteIsViewer(paddr - kIsViewer, value);
         return;
@@ -1089,7 +1078,7 @@ void System::WriteCart32(uint32_t paddr, uint32_t value)
 
     if (paddr < kPifRom)
     {
-        pi_.cart_address = (paddr + 4) & 0xFFFFFFFE;
+        pi_.cart_address = (paddr + 4) & kPiCartAddressMask;
     }
 
     // With the legacy timing, the latch keeps the last write until a read. On the hardware, the first write fills it
@@ -1173,8 +1162,8 @@ uint32_t System::ReadPhysical32(uint32_t paddr)
     }
     if (paddr >= kSpDmem && paddr < kSpRegisters)
     {
-        const auto& memory = (paddr & 0x1000) != 0 ? rsp_->Imem() : rsp_->Dmem();
-        return xsflib::LoadBe32(memory.data() + (paddr & 0xFFC));
+        const auto& memory = rsp_->Memory(paddr);
+        return xsflib::LoadBe32(memory.data() + (paddr & Rsp::kWordAddressMask));
     }
     if (paddr >= kCartRom && paddr < kPifRom)
     {
@@ -1221,8 +1210,8 @@ bool System::ReadVirtual(uint64_t vaddr, std::span<uint8_t> bytes)
         }
         else if (*paddr >= kSpDmem && *paddr < kSpRegisters)
         {
-            const auto& memory = (*paddr & 0x1000) != 0 ? rsp_->Imem() : rsp_->Dmem();
-            bytes[i] = memory[*paddr & 0xFFF];
+            const auto& memory = rsp_->Memory(*paddr);
+            bytes[i] = memory[*paddr & Rsp::kAddressMask];
         }
         else
         {
@@ -1249,8 +1238,8 @@ bool System::WriteVirtual(uint64_t vaddr, std::span<const uint8_t> bytes)
         }
         else if (*paddr >= kSpDmem && *paddr < kSpRegisters)
         {
-            auto& memory = (*paddr & 0x1000) != 0 ? rsp_->Imem() : rsp_->Dmem();
-            memory[*paddr & 0xFFF] = bytes[i];
+            auto& memory = rsp_->Memory(*paddr);
+            memory[*paddr & Rsp::kAddressMask] = bytes[i];
         }
         else
         {
@@ -1288,8 +1277,8 @@ void System::SetDebugOutput(std::function<void(std::string_view)> callback)
 System::Frame System::VideoFrame() const
 {
     // VI_STATUS bits 0 and 1 give the pixel format: 2 for 16 bits, 3 for 32 bits.
-    const uint32_t type = vi_.registers[0] & 3;
-    return {vi_.registers[1] & 0xFFFFFF, vi_.registers[2] & 0xFFF, type == 3 ? 4u : 2u};
+    const uint32_t type = vi_.registers[Vi::kStatus] & 3;
+    return {vi_.registers[Vi::kOrigin] & kRdramAddressMask, vi_.registers[Vi::kWidth] & 0xFFF, type == 3 ? 4u : 2u};
 }
 
 QuietReport System::CheckQuiet() const
@@ -1301,8 +1290,8 @@ QuietReport System::CheckQuiet() const
     report.sp_dma_busy = rsp_->DmaBusy() || rsp_->DmaFull();
     report.pi_dma_busy = pi_.busy;
     report.si_dma_busy = si_.busy;
-    report.dp_busy = (dp_.status & 0x170) != 0 || dp_.current != dp_.end;
-    report.ai_buffers = ai_.count;
+    constexpr uint32_t kDpBusy = kDpTmemBusy | kDpPipeBusy | kDpCommandBusy | kDpDmaBusy;
+    report.dp_busy = (dp_.status & kDpBusy) != 0 || dp_.current != dp_.end;
     report.ai_buffer_waiting = ai_.count > 1;
 
     return report;

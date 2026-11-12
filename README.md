@@ -237,6 +237,7 @@ build/n64run --seconds 10 --wav out.wav game.z64
 `--legacy` uses the timing of the legacy players. `--pif FILE` reads the dump of the PIF ROM. `--8mb` sets the RDRAM
 to 8 MiB. `--debug-port` prints what a program writes to the debug port at 0x13FF0000. `--controller`
 connects a controller to the first port, and `--eeprom 4k` or `--eeprom 16k` an EEPROM to the cartridge.
+`--port P` (1 to 4) picks the port that the next `--controller` or `--input` uses. The default is port 1.
 `--input F:B[:X:Y]` holds the buttons B, in hex as the controller sends them, from video field F on, with the stick at
 X and Y. `--board aleck64` or `--board aleck64-e90` runs an image on the Aleck64 board, with 8 MiB of RDRAM.
 `--board-input F:S:Y[:R]` sets the board's inputs from video field F on: the words S at 0xC0800000 and Y at
@@ -269,7 +270,8 @@ frames are compared with the screenshots in the repository of the tests. `tests/
 are left out, and why.
 
 With `USF_FRAME=<file>` set, the runner writes the frame of a PeterLemon test to that file as a PPM image. With
-`USF_TRACE` set, it prints each exception that the CPU takes and where it found each verdict.
+`USF_TRACE` set, it prints the first 64 exceptions other than interrupts that the CPU takes, and where it found each
+verdict.
 
 ## Known gaps
 

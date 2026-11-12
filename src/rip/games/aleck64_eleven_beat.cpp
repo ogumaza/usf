@@ -18,15 +18,14 @@
 // - The sequence reader at 0x8008FC14 reads one track of a sequence. At 0x8008FDCC it has reached the end of a loop,
 //   with the loop's count in a0, the end's address in v0 and the track in t3. A count of 0xFF repeats for ever.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -36,10 +35,7 @@ constexpr uint32_t kAskForSong = 0x80004268;
 constexpr uint32_t kLoopEnd = 0x8008FDCC;
 constexpr uint32_t kInputThread = 0x800B37B0;
 
-// RDRAM near the end that stays zero through the attract mode.
-constexpr uint32_t kDriverAddress = 0x807FF000;
-
-constexpr int kSongs = 20;
+constexpr uint32_t kSongs = 20;
 
 // The board's inputs at 0xC0800004 while nothing is pressed.
 constexpr uint32_t kSystemInputs = 0xFF3CFFFF;
@@ -56,32 +52,27 @@ GameProfile Aleck64ElevenBeat()
     profile.serial = "Aleck64 Eleven Beat";
     profile.sha1 = "5432056f34c378b5862009e5b79a256c10c5a20e";
     profile.year = "1998";
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
     profile.board_inputs.system = kSystemInputs;
 
     profile.snapshot_address = kIdleLoop;
     profile.snapshot_hit = kIdleAfterBoot;
-    profile.quiet_tries = 1000000;
+    profile.quiet_tries = kUntilQuiet;
     profile.boot_seconds = 5.0;
     profile.stop_threads = {kInputThread};
 
     CallDriverOptions driver;
-    driver.address = kDriverAddress;
+    driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}}}};
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 2, .track_register = 11, .count_register = 4});
+        {.address = kLoopEnd, .target_register = mips::kV0, .track_register = mips::kT3, .count_register = mips::kA0});
 
-    for (int number = 0; number < kSongs; number++)
+    for (uint32_t number = 0; number < kSongs; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[16];
-        std::snprintf(name, sizeof(name), "Song %d", number);
-        track.name = name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Song", number, TitleBase::kDecimal)));
     }
 
     return profile;

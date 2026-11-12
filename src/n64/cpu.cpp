@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: MIT
 
-// The VR4300's main loop, its integer instructions, and its loads and stores. COP0 and translation are in
-// cpu_cop0.cpp and COP1 in cpu_fpu.cpp.
+// The VR4300's main loop, its integer instructions, and its loads and stores. COP0 and translation are in cpu_cop0.cpp
+// and COP1 in cpu_fpu.cpp.
 
 #include "n64/cpu.h"
 
 #include <limits>
+#include <type_traits>
 
 #include "xsflib/bytes.h"
 
+#include "n64/bits.h"
+#include "n64/constants.h"
+#include "n64/cpu_cop0.h"
+#include "n64/mips_registers.h"
 #include "n64/system.h"
 
 namespace usf::n64
 {
-
 namespace
 {
-
-uint64_t SignExtend32(uint64_t value)
-{
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(static_cast<uint32_t>(value))));
-}
 
 // The 128-bit product of two 64-bit values, as high and low halves.
 void Multiply64(uint64_t a, uint64_t b, uint64_t& high, uint64_t& low)
@@ -36,6 +35,31 @@ void Multiply64(uint64_t a, uint64_t b, uint64_t& high, uint64_t& low)
     const uint64_t middle = (low_low >> 32) + (high_low & 0xFFFFFFFF) + (low_high & 0xFFFFFFFF);
     low = (middle << 32) | (low_low & 0xFFFFFFFF);
     high = high_high + (high_low >> 32) + (low_high >> 32) + (middle >> 32);
+}
+
+// Whether a + b or a - b overflows as a signed sum or difference, in 32 or 64 bits.
+bool AddOverflows32(uint32_t a, uint32_t b)
+{
+    const uint32_t sum = a + b;
+    return ((~(a ^ b) & (a ^ sum)) & 0x80000000u) != 0;
+}
+
+bool SubtractOverflows32(uint32_t a, uint32_t b)
+{
+    const uint32_t difference = a - b;
+    return (((a ^ b) & (a ^ difference)) & 0x80000000u) != 0;
+}
+
+bool AddOverflows64(uint64_t a, uint64_t b)
+{
+    const uint64_t sum = a + b;
+    return ((~(a ^ b) & (a ^ sum)) >> 63) != 0;
+}
+
+bool SubtractOverflows64(uint64_t a, uint64_t b)
+{
+    const uint64_t difference = a - b;
+    return (((a ^ b) & (a ^ difference)) >> 63) != 0;
 }
 
 void MultiplySigned64(int64_t a, int64_t b, uint64_t& high, uint64_t& low)
@@ -94,7 +118,7 @@ void Cpu::Reset()
     gpr_ = {};
     hi_ = 0;
     lo_ = 0;
-    current_pc_ = 0xFFFFFFFFBFC00000ull;
+    current_pc_ = kResetVector;
     pc_ = current_pc_;
     next_pc_ = pc_ + 4;
     branch_pending_ = false;
@@ -107,24 +131,25 @@ void Cpu::Reset()
     index_ = 0;
     entry_lo0_ = 0;
     entry_lo1_ = 0;
-    context_ = 0x007FFFF0;
+    context_ = kContextBadVpn2Mask;
     page_mask_ = 0;
     wired_ = 0;
-    // A console that has just been turned on reads all ones from BadVAddr, EPC and ErrorEPC, Context and XContext
-    // that match that BadVAddr, and 3 from the coprocessor field of Cause. A reset doesn't change them.
-    // n64-systemtest's startup test and PeterLemon's COP0 and exception tests record these values.
+
+    // A console that has just been turned on reads all ones from BadVAddr, EPC and ErrorEPC, Context and XContext that
+    // match that BadVAddr, and 3 from the coprocessor field of Cause. A reset doesn't change them. n64-systemtest's
+    // startup test and PeterLemon's COP0 and exception tests record these values.
     bad_vaddr_ = ~uint64_t{0};
     count_offset_ = 0 - now_;
     entry_hi_ = 0;
     compare_ = 0;
-    status_ = 0x34000000;
-    cause_ = 0x30000000;
+    status_ = kStatusCu0 | kStatusCu1 | kStatusFr;
+    cause_ = kCauseCoprocessorMask;
     epc_ = ~uint64_t{0};
-    config_ = 0x7006E463;
+    config_ = kConfigReset;
     ll_addr_ = 0;
     watch_lo_ = 0;
     watch_hi_ = 0;
-    x_context_ = 0x1FFFFFFF0;
+    x_context_ = kXContextBadVpn2Mask;
     parity_error_ = 0;
     tag_lo_ = 0;
     error_epc_ = ~uint64_t{0};
@@ -147,28 +172,29 @@ void Cpu::Reset()
     interrupt_pending_ = false;
     fetch_page_ = ~uint64_t{0};
     translation_epoch_++;
+    fast_pages_.clear();
 
-    // The TLB's contents at power-on are undefined, but they don't map the low addresses: PeterLemon's TLB tests see
-    // a refill exception for address 0x10. Each entry gets a page of kseg0, which is never translated, as libultra
-    // does when it clears the TLB.
+    // The TLB's contents at power-on are undefined, but they don't map the low addresses: PeterLemon's TLB tests see a
+    // refill exception for address 0x10. Each entry gets a page of kseg0, which is never translated, as libultra does
+    // when it clears the TLB.
     for (int i = 0; i < 32; i++)
     {
         TlbEntry entry;
-        entry.entry_hi = 0xFFFFFFFF80000000ull + static_cast<uint64_t>(i) * 0x2000;
+        entry.entry_hi = SignExtend32(kKseg0) + static_cast<uint64_t>(i) * 0x2000;
         SetTlb(i, entry);
     }
 }
 
 uint64_t Cpu::Gpr(int index) const
 {
-    return gpr_[index];
+    return gpr_[index & 31];
 }
 
 void Cpu::SetGpr(int index, uint64_t value)
 {
-    if (index != 0)
+    if ((index & 31) != 0)
     {
-        gpr_[index] = value;
+        gpr_[index & 31] = value;
     }
 }
 
@@ -184,34 +210,9 @@ void Cpu::SetPc(uint64_t pc)
     branch_pending_ = false;
 }
 
-uint64_t Cpu::Hi() const
-{
-    return hi_;
-}
-
-uint64_t Cpu::Lo() const
-{
-    return lo_;
-}
-
-void Cpu::SetHi(uint64_t value)
-{
-    hi_ = value;
-}
-
-void Cpu::SetLo(uint64_t value)
-{
-    lo_ = value;
-}
-
 uint64_t Cpu::InstructionCount() const
 {
     return instructions_;
-}
-
-bool Cpu::InIdleLoop() const
-{
-    return idle_loop_;
 }
 
 bool Cpu::InDelaySlot() const
@@ -359,39 +360,35 @@ bool Cpu::Fetch(uint32_t& instruction)
         return false;
     }
 
-    if ((pc & ~uint64_t{0xFFF}) == fetch_page_ && fetch_epoch_ == translation_epoch_)
-    {
-        const uint32_t paddr = fetch_page_paddr_ | static_cast<uint32_t>(pc & 0xFFF);
-        instruction = xsflib::LoadBe32(system_.RdramData() + paddr);
-        if (Coverage* coverage = system_.ActiveCoverage())
-        {
-            coverage->ReadRdram(paddr, 4);
-        }
-
-        return true;
-    }
-
+    // The cached page, or a translation. An instruction outside plain RDRAM comes from the bus. It starts no cached
+    // page.
     uint32_t paddr = 0;
-    if (!Translate(pc, Access::kFetch, paddr))
+    if ((pc & ~uint64_t{kPageOffsetMask}) == fetch_page_ && fetch_epoch_ == translation_epoch_)
     {
-        return false;
+        paddr = fetch_page_paddr_ | static_cast<uint32_t>(pc & kPageOffsetMask);
     }
-
-    if (paddr < system_.DirectRdramSize())
+    else
     {
-        fetch_page_ = pc & ~uint64_t{0xFFF};
-        fetch_page_paddr_ = paddr & ~0xFFFu;
-        fetch_epoch_ = translation_epoch_;
-        instruction = xsflib::LoadBe32(system_.RdramData() + paddr);
-        if (Coverage* coverage = system_.ActiveCoverage())
+        if (!Translate(pc, Access::kFetch, paddr))
         {
-            coverage->ReadRdram(paddr, 4);
+            return false;
+        }
+        if (paddr >= system_.DirectRdramSize())
+        {
+            instruction = system_.ReadBus32(paddr);
+            return true;
         }
 
-        return true;
+        fetch_page_ = pc & ~uint64_t{kPageOffsetMask};
+        fetch_page_paddr_ = paddr & ~kPageOffsetMask;
+        fetch_epoch_ = translation_epoch_;
     }
 
-    instruction = system_.ReadBus32(paddr);
+    instruction = xsflib::LoadBe32(system_.RdramData() + paddr);
+    if (Coverage* coverage = system_.ActiveCoverage())
+    {
+        coverage->ReadRdram(paddr, 4);
+    }
 
     return true;
 }
@@ -542,12 +539,11 @@ void Cpu::BranchLikely(bool taken, uint64_t target)
 
 bool Cpu::Allows64Bit() const
 {
-    const bool kernel = (status_ & (kStatusExl | kStatusErl)) != 0 || ((status_ >> 3) & 3) == 0;
-    if (kernel)
+    if (KernelMode())
     {
         return true;
     }
-    if (((status_ >> 3) & 3) == 1)
+    if (Ksu() == kKsuSupervisor)
     {
         return (status_ & kStatusSx) != 0;
     }
@@ -571,12 +567,12 @@ void Cpu::Execute(uint32_t instruction)
         break;
 
     case 0x02:
-        Branch(true, ((current_pc_ + 4) & 0xFFFFFFFFF0000000ull) | ((instruction & 0x03FFFFFF) << 2));
+        Branch(true, ((current_pc_ + 4) & mips::kJumpRegionMask) | ((instruction & mips::kJumpIndexMask) << 2));
         break;
 
     case 0x03:
-        gpr_[31] = pc_ + 4;
-        Branch(true, ((current_pc_ + 4) & 0xFFFFFFFFF0000000ull) | ((instruction & 0x03FFFFFF) << 2));
+        gpr_[mips::kRa] = pc_ + 4;
+        Branch(true, ((current_pc_ + 4) & mips::kJumpRegionMask) | ((instruction & mips::kJumpIndexMask) << 2));
         break;
 
     case 0x04:
@@ -600,14 +596,13 @@ void Cpu::Execute(uint32_t instruction)
             // ADDI traps on signed overflow.
             const uint32_t a = static_cast<uint32_t>(gpr_[rs]);
             const uint32_t b = static_cast<uint32_t>(SignedImmediate(instruction));
-            const uint32_t sum = a + b;
-            if (((~(a ^ b) & (a ^ sum)) & 0x80000000u) != 0)
+            if (AddOverflows32(a, b))
             {
                 RaiseException(ExceptionCode::kOverflow);
                 break;
             }
 
-            gpr_[rt] = SignExtend32(sum);
+            gpr_[rt] = SignExtend32(a + b);
             break;
         }
 
@@ -702,14 +697,13 @@ void Cpu::Execute(uint32_t instruction)
 
             const uint64_t a = gpr_[rs];
             const uint64_t b = SignedImmediate(instruction);
-            const uint64_t sum = a + b;
-            if (((~(a ^ b) & (a ^ sum)) >> 63) != 0)
+            if (AddOverflows64(a, b))
             {
                 RaiseException(ExceptionCode::kOverflow);
                 break;
             }
 
-            gpr_[rt] = sum;
+            gpr_[rt] = a + b;
             break;
         }
 
@@ -725,34 +719,40 @@ void Cpu::Execute(uint32_t instruction)
 
     case 0x2F:
         // CACHE: no cache is modelled. Outside kernel mode it needs COP0.
-        if (!((status_ & (kStatusExl | kStatusErl)) != 0 || ((status_ >> 3) & 3) == 0) && (status_ & kStatusCu0) == 0)
+        if (!KernelMode() && (status_ & kStatusCu0) == 0)
         {
             RaiseException(ExceptionCode::kCoprocessorUnusable, 0);
         }
         break;
 
-    default:
-        if (op >= 0x1A && op != 0x1C && op != 0x1D && op != 0x1E && op != 0x1F && op != 0x33 && op != 0x3B &&
-            op != 0x32 && op != 0x36 && op != 0x3A && op != 0x3E)
+    case 0x32:
+    case 0x36:
+    case 0x3A:
+    case 0x3E:
+        // LWC2, LDC2, SWC2 and SDC2.
+        if ((status_ & kStatusCu2) == 0)
         {
-            ExecuteLoadStore(instruction);
-            break;
+            RaiseException(ExceptionCode::kCoprocessorUnusable, 2);
         }
-        if (op == 0x32 || op == 0x36 || op == 0x3A || op == 0x3E)
+        else
         {
-            // LWC2, LDC2, SWC2 and SDC2.
-            if ((status_ & kStatusCu2) == 0)
-            {
-                RaiseException(ExceptionCode::kCoprocessorUnusable, 2);
-            }
-            else
-            {
-                RaiseException(ExceptionCode::kReservedInstruction, 2);
-            }
-            break;
+            RaiseException(ExceptionCode::kReservedInstruction, 2);
         }
+        break;
 
+    case 0x13:
+    case 0x1C:
+    case 0x1D:
+    case 0x1E:
+    case 0x1F:
+    case 0x33:
+    case 0x3B:
         RaiseException(ExceptionCode::kReservedInstruction);
+        break;
+
+    default:
+        // Every other opcode from 0x1A up is a load or a store.
+        ExecuteLoadStore(instruction);
         break;
     }
 }
@@ -865,6 +865,167 @@ void Cpu::ExecuteSpecial(uint32_t instruction)
         break;
 
     case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
+    case 0x1C:
+    case 0x1D:
+    case 0x1E:
+    case 0x1F:
+        ExecuteMultiplyDivide(funct, s, t);
+        break;
+
+    case 0x20:
+        {
+            const uint32_t a = static_cast<uint32_t>(s);
+            const uint32_t b = static_cast<uint32_t>(t);
+            if (AddOverflows32(a, b))
+            {
+                RaiseException(ExceptionCode::kOverflow);
+                break;
+            }
+
+            gpr_[rd] = SignExtend32(a + b);
+            break;
+        }
+
+    case 0x21:
+        gpr_[rd] = SignExtend32(s + t);
+        break;
+
+    case 0x22:
+        {
+            const uint32_t a = static_cast<uint32_t>(s);
+            const uint32_t b = static_cast<uint32_t>(t);
+            if (SubtractOverflows32(a, b))
+            {
+                RaiseException(ExceptionCode::kOverflow);
+                break;
+            }
+
+            gpr_[rd] = SignExtend32(a - b);
+            break;
+        }
+
+    case 0x23:
+        gpr_[rd] = SignExtend32(s - t);
+        break;
+
+    case 0x24:
+        gpr_[rd] = s & t;
+        break;
+
+    case 0x25:
+        gpr_[rd] = s | t;
+        break;
+
+    case 0x26:
+        gpr_[rd] = s ^ t;
+        break;
+
+    case 0x27:
+        gpr_[rd] = ~(s | t);
+        break;
+
+    case 0x2A:
+        gpr_[rd] = static_cast<int64_t>(s) < static_cast<int64_t>(t) ? 1 : 0;
+        break;
+
+    case 0x2B:
+        gpr_[rd] = s < t ? 1 : 0;
+        break;
+
+    case 0x2C:
+        {
+            if (AddOverflows64(s, t))
+            {
+                RaiseException(ExceptionCode::kOverflow);
+                break;
+            }
+
+            gpr_[rd] = s + t;
+            break;
+        }
+
+    case 0x2D:
+        gpr_[rd] = s + t;
+        break;
+
+    case 0x2E:
+        {
+            if (SubtractOverflows64(s, t))
+            {
+                RaiseException(ExceptionCode::kOverflow);
+                break;
+            }
+
+            gpr_[rd] = s - t;
+            break;
+        }
+
+    case 0x2F:
+        gpr_[rd] = s - t;
+        break;
+
+    case 0x30:
+        TrapIf(static_cast<int64_t>(s) >= static_cast<int64_t>(t));
+        break;
+
+    case 0x31:
+        TrapIf(s >= t);
+        break;
+
+    case 0x32:
+        TrapIf(static_cast<int64_t>(s) < static_cast<int64_t>(t));
+        break;
+
+    case 0x33:
+        TrapIf(s < t);
+        break;
+
+    case 0x34:
+        TrapIf(s == t);
+        break;
+
+    case 0x36:
+        TrapIf(s != t);
+        break;
+
+    case 0x38:
+        gpr_[rd] = t << sa;
+        break;
+
+    case 0x3A:
+        gpr_[rd] = t >> sa;
+        break;
+
+    case 0x3B:
+        gpr_[rd] = static_cast<uint64_t>(static_cast<int64_t>(t) >> sa);
+        break;
+
+    case 0x3C:
+        gpr_[rd] = t << (sa + 32);
+        break;
+
+    case 0x3E:
+        gpr_[rd] = t >> (sa + 32);
+        break;
+
+    case 0x3F:
+        gpr_[rd] = static_cast<uint64_t>(static_cast<int64_t>(t) >> (sa + 32));
+        break;
+
+    default:
+        RaiseException(ExceptionCode::kReservedInstruction);
+        break;
+    }
+}
+
+void Cpu::ExecuteMultiplyDivide(uint32_t funct, uint64_t s, uint64_t t)
+{
+    switch (funct)
+    {
+    case 0x18:
         {
             // The hardware multiplies all 64 bits of rs by the low 35 bits of rt. Operands that aren't sign-extended
             // 32-bit values show it.
@@ -965,170 +1126,7 @@ void Cpu::ExecuteSpecial(uint32_t instruction)
         }
         break;
 
-    case 0x20:
-        {
-            const uint32_t a = static_cast<uint32_t>(s);
-            const uint32_t b = static_cast<uint32_t>(t);
-            const uint32_t sum = a + b;
-            if (((~(a ^ b) & (a ^ sum)) & 0x80000000u) != 0)
-            {
-                RaiseException(ExceptionCode::kOverflow);
-                break;
-            }
-
-            gpr_[rd] = SignExtend32(sum);
-            break;
-        }
-
-    case 0x21:
-        gpr_[rd] = SignExtend32(s + t);
-        break;
-
-    case 0x22:
-        {
-            const uint32_t a = static_cast<uint32_t>(s);
-            const uint32_t b = static_cast<uint32_t>(t);
-            const uint32_t difference = a - b;
-            if ((((a ^ b) & (a ^ difference)) & 0x80000000u) != 0)
-            {
-                RaiseException(ExceptionCode::kOverflow);
-                break;
-            }
-
-            gpr_[rd] = SignExtend32(difference);
-            break;
-        }
-
-    case 0x23:
-        gpr_[rd] = SignExtend32(s - t);
-        break;
-
-    case 0x24:
-        gpr_[rd] = s & t;
-        break;
-
-    case 0x25:
-        gpr_[rd] = s | t;
-        break;
-
-    case 0x26:
-        gpr_[rd] = s ^ t;
-        break;
-
-    case 0x27:
-        gpr_[rd] = ~(s | t);
-        break;
-
-    case 0x2A:
-        gpr_[rd] = static_cast<int64_t>(s) < static_cast<int64_t>(t) ? 1 : 0;
-        break;
-
-    case 0x2B:
-        gpr_[rd] = s < t ? 1 : 0;
-        break;
-
-    case 0x2C:
-        {
-            const uint64_t sum = s + t;
-            if (((~(s ^ t) & (s ^ sum)) >> 63) != 0)
-            {
-                RaiseException(ExceptionCode::kOverflow);
-                break;
-            }
-
-            gpr_[rd] = sum;
-            break;
-        }
-
-    case 0x2D:
-        gpr_[rd] = s + t;
-        break;
-
-    case 0x2E:
-        {
-            const uint64_t difference = s - t;
-            if ((((s ^ t) & (s ^ difference)) >> 63) != 0)
-            {
-                RaiseException(ExceptionCode::kOverflow);
-                break;
-            }
-
-            gpr_[rd] = difference;
-            break;
-        }
-
-    case 0x2F:
-        gpr_[rd] = s - t;
-        break;
-
-    case 0x30:
-        if (static_cast<int64_t>(s) >= static_cast<int64_t>(t))
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x31:
-        if (s >= t)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x32:
-        if (static_cast<int64_t>(s) < static_cast<int64_t>(t))
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x33:
-        if (s < t)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x34:
-        if (s == t)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x36:
-        if (s != t)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
-        break;
-
-    case 0x38:
-        gpr_[rd] = t << sa;
-        break;
-
-    case 0x3A:
-        gpr_[rd] = t >> sa;
-        break;
-
-    case 0x3B:
-        gpr_[rd] = static_cast<uint64_t>(static_cast<int64_t>(t) >> sa);
-        break;
-
-    case 0x3C:
-        gpr_[rd] = t << (sa + 32);
-        break;
-
-    case 0x3E:
-        gpr_[rd] = t >> (sa + 32);
-        break;
-
-    case 0x3F:
-        gpr_[rd] = static_cast<uint64_t>(static_cast<int64_t>(t) >> (sa + 32));
-        break;
-
     default:
-        RaiseException(ExceptionCode::kReservedInstruction);
         break;
     }
 }
@@ -1158,70 +1156,79 @@ void Cpu::ExecuteRegimm(uint32_t instruction)
         break;
 
     case 0x08:
-        if (s >= immediate)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(s >= immediate);
         break;
 
     case 0x09:
-        if (static_cast<uint64_t>(s) >= static_cast<uint64_t>(immediate))
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(static_cast<uint64_t>(s) >= static_cast<uint64_t>(immediate));
         break;
 
     case 0x0A:
-        if (s < immediate)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(s < immediate);
         break;
 
     case 0x0B:
-        if (static_cast<uint64_t>(s) < static_cast<uint64_t>(immediate))
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(static_cast<uint64_t>(s) < static_cast<uint64_t>(immediate));
         break;
 
     case 0x0C:
-        if (s == immediate)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(s == immediate);
         break;
 
     case 0x0E:
-        if (s != immediate)
-        {
-            RaiseException(ExceptionCode::kTrap);
-        }
+        TrapIf(s != immediate);
         break;
 
     case 0x10:
-        gpr_[31] = pc_ + 4;
+        gpr_[mips::kRa] = pc_ + 4;
         Branch(s < 0, target);
         break;
 
     case 0x11:
-        gpr_[31] = pc_ + 4;
+        gpr_[mips::kRa] = pc_ + 4;
         Branch(s >= 0, target);
         break;
 
     case 0x12:
-        gpr_[31] = pc_ + 4;
+        gpr_[mips::kRa] = pc_ + 4;
         BranchLikely(s < 0, target);
         break;
 
     case 0x13:
-        gpr_[31] = pc_ + 4;
+        gpr_[mips::kRa] = pc_ + 4;
         BranchLikely(s >= 0, target);
         break;
 
     default:
         RaiseException(ExceptionCode::kReservedInstruction);
         break;
+    }
+}
+
+void Cpu::TrapIf(bool condition)
+{
+    if (condition)
+    {
+        RaiseException(ExceptionCode::kTrap);
+    }
+}
+
+template <typename T, bool kSigned>
+void Cpu::LoadInto(uint64_t vaddr, uint32_t rt)
+{
+    T value = 0;
+    if (!Load(vaddr, value))
+    {
+        return;
+    }
+
+    if constexpr (kSigned)
+    {
+        gpr_[rt] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<std::make_signed_t<T>>(value)));
+    }
+    else
+    {
+        gpr_[rt] = value;
     }
 }
 
@@ -1243,137 +1250,39 @@ void Cpu::ExecuteLoadStore(uint32_t instruction)
     switch (op)
     {
     case 0x20:
-        {
-            uint8_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(value)));
-            }
-            break;
-        }
+        LoadInto<uint8_t, true>(vaddr, rt);
+        break;
 
     case 0x21:
-        {
-            uint16_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int16_t>(value)));
-            }
-            break;
-        }
+        LoadInto<uint16_t, true>(vaddr, rt);
+        break;
 
     case 0x23:
-        {
-            uint32_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = SignExtend32(value);
-            }
-            break;
-        }
+        LoadInto<uint32_t, true>(vaddr, rt);
+        break;
 
     case 0x24:
-        {
-            uint8_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = value;
-            }
-            break;
-        }
+        LoadInto<uint8_t, false>(vaddr, rt);
+        break;
 
     case 0x25:
-        {
-            uint16_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = value;
-            }
-            break;
-        }
+        LoadInto<uint16_t, false>(vaddr, rt);
+        break;
 
     case 0x27:
-        {
-            uint32_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = value;
-            }
-            break;
-        }
+        LoadInto<uint32_t, false>(vaddr, rt);
+        break;
 
     case 0x37:
-        {
-            uint64_t value = 0;
-            if (Load(vaddr, value))
-            {
-                gpr_[rt] = value;
-            }
-            break;
-        }
-
-    case 0x22:
-    case 0x26:
-        {
-            // LWL and LWR merge the bytes of an aligned word into the register. LWL always sign-extends. LWR does only
-            // when it loads the whole word.
-            // The exception for an unmapped address reports the address itself, not the aligned word's.
-            uint32_t paddr = 0;
-            if (!Translate(vaddr, Access::kLoad, paddr))
-            {
-                break;
-            }
-
-            uint32_t word = 0;
-            LoadPhysical(paddr & ~3u, word);
-
-            const uint32_t offset = static_cast<uint32_t>(vaddr & 3);
-            const uint32_t old = static_cast<uint32_t>(gpr_[rt]);
-            if (op == 0x22)
-            {
-                const uint32_t shift = 8 * offset;
-                const uint32_t keep = offset == 0 ? 0 : (0xFFFFFFFFu >> (32 - shift));
-                gpr_[rt] = SignExtend32((old & keep) | (word << shift));
-            }
-            else
-            {
-                const uint32_t shift = 8 * (3 - offset);
-                const uint32_t keep = offset == 3 ? 0 : ~(0xFFFFFFFFu >> shift);
-                const uint32_t merged = (old & keep) | (word >> shift);
-                gpr_[rt] = offset == 3 ? SignExtend32(merged) : ((gpr_[rt] & 0xFFFFFFFF00000000ull) | merged);
-            }
-            break;
-        }
+        LoadInto<uint64_t, false>(vaddr, rt);
+        break;
 
     case 0x1A:
     case 0x1B:
-        {
-            // LDL and LDR.
-            uint32_t paddr = 0;
-            if (!Translate(vaddr, Access::kLoad, paddr))
-            {
-                break;
-            }
-
-            uint64_t doubleword_value = 0;
-            LoadPhysical(paddr & ~7u, doubleword_value);
-
-            const uint32_t offset = static_cast<uint32_t>(vaddr & 7);
-            const uint64_t old = gpr_[rt];
-            if (op == 0x1A)
-            {
-                const uint32_t shift = 8 * offset;
-                const uint64_t keep = offset == 0 ? 0 : (~uint64_t{0} >> (64 - shift));
-                gpr_[rt] = (old & keep) | (doubleword_value << shift);
-            }
-            else
-            {
-                const uint32_t shift = 8 * (7 - offset);
-                const uint64_t keep = offset == 7 ? 0 : ~(~uint64_t{0} >> shift);
-                gpr_[rt] = (old & keep) | (doubleword_value >> shift);
-            }
-            break;
-        }
+    case 0x22:
+    case 0x26:
+        LoadPartial(op, vaddr, rt);
+        break;
 
     case 0x30:
     case 0x34:
@@ -1394,21 +1303,13 @@ void Cpu::ExecuteLoadStore(uint32_t instruction)
             if (word)
             {
                 uint32_t value = 0;
-                if (!Load(vaddr, value))
-                {
-                    break;
-                }
-
+                LoadPhysical(paddr, value);
                 gpr_[rt] = SignExtend32(value);
             }
             else
             {
                 uint64_t value = 0;
-                if (!Load(vaddr, value))
-                {
-                    break;
-                }
-
+                LoadPhysical(paddr, value);
                 gpr_[rt] = value;
             }
 
@@ -1466,57 +1367,8 @@ void Cpu::ExecuteLoadStore(uint32_t instruction)
     case 0x2E:
     case 0x2C:
     case 0x2D:
-        {
-            // SWL, SWR, SDL and SDR store part of the register into an aligned word or doubleword, as a series of
-            // naturally aligned stores.
-            const bool is_double = op == 0x2C || op == 0x2D;
-            const uint32_t size = is_double ? 8 : 4;
-            const uint32_t offset = static_cast<uint32_t>(vaddr & (size - 1));
-            const bool left = op == 0x2A || op == 0x2C;
-            const uint64_t value = is_double ? gpr_[rt] : (gpr_[rt] & 0xFFFFFFFF);
-
-            // The bytes of the block to write, and the block's contents for them.
-            uint32_t first = 0;
-            uint32_t last = 0;
-            uint64_t block = 0;
-            if (left)
-            {
-                first = offset;
-                last = size - 1;
-                block = offset == 0 ? value : value >> (8 * offset);
-            }
-            else
-            {
-                first = 0;
-                last = offset;
-                block = offset == size - 1 ? value : value << (8 * (size - 1 - offset));
-            }
-
-            // The exception for an unmapped address reports the address itself, not the aligned block's.
-            uint32_t paddr = 0;
-            if (!Translate(vaddr, Access::kStore, paddr))
-            {
-                break;
-            }
-            paddr &= ~(size - 1);
-
-            uint32_t position = first;
-            while (position <= last)
-            {
-                // The largest aligned piece that starts here and fits.
-                uint32_t piece = size;
-                while (piece > 1 && ((position & (piece - 1)) != 0 || position + piece - 1 > last))
-                {
-                    piece /= 2;
-                }
-
-                const uint32_t shift = 8 * (size - position - piece);
-                const uint64_t mask = piece == 8 ? ~uint64_t{0} : ((uint64_t{1} << (8 * piece)) - 1);
-                system_.WriteBus(paddr + position, (block >> shift) & mask, static_cast<int>(piece));
-                position += piece;
-            }
-            break;
-        }
+        StorePartial(op, vaddr, rt);
+        break;
 
     case 0x31:
     case 0x35:
@@ -1528,6 +1380,112 @@ void Cpu::ExecuteLoadStore(uint32_t instruction)
     default:
         RaiseException(ExceptionCode::kReservedInstruction);
         break;
+    }
+}
+
+void Cpu::LoadPartial(uint32_t op, uint64_t vaddr, uint32_t rt)
+{
+    // LWL and LWR merge the bytes of an aligned word into the register. LWL always sign-extends. LWR does only when it
+    // loads the whole word. The exception for an unmapped address reports the address itself, not the aligned word's.
+    uint32_t paddr = 0;
+    if (!Translate(vaddr, Access::kLoad, paddr))
+    {
+        return;
+    }
+
+    if (op == 0x22 || op == 0x26)
+    {
+        uint32_t word = 0;
+        LoadPhysical(paddr & ~3u, word);
+
+        const uint32_t offset = static_cast<uint32_t>(vaddr & 3);
+        const uint32_t old = static_cast<uint32_t>(gpr_[rt]);
+        if (op == 0x22)
+        {
+            const uint32_t shift = 8 * offset;
+            const uint32_t keep = offset == 0 ? 0 : (0xFFFFFFFFu >> (32 - shift));
+            gpr_[rt] = SignExtend32((old & keep) | (word << shift));
+        }
+        else
+        {
+            const uint32_t shift = 8 * (3 - offset);
+            const uint32_t keep = offset == 3 ? 0 : ~(0xFFFFFFFFu >> shift);
+            const uint32_t merged = (old & keep) | (word >> shift);
+            gpr_[rt] = offset == 3 ? SignExtend32(merged) : ((gpr_[rt] & 0xFFFFFFFF00000000ull) | merged);
+        }
+        return;
+    }
+
+    // LDL and LDR.
+    uint64_t doubleword_value = 0;
+    LoadPhysical(paddr & ~7u, doubleword_value);
+
+    const uint32_t offset = static_cast<uint32_t>(vaddr & 7);
+    const uint64_t old = gpr_[rt];
+    if (op == 0x1A)
+    {
+        const uint32_t shift = 8 * offset;
+        const uint64_t keep = offset == 0 ? 0 : (~uint64_t{0} >> (64 - shift));
+        gpr_[rt] = (old & keep) | (doubleword_value << shift);
+    }
+    else
+    {
+        const uint32_t shift = 8 * (7 - offset);
+        const uint64_t keep = offset == 7 ? 0 : ~(~uint64_t{0} >> shift);
+        gpr_[rt] = (old & keep) | (doubleword_value >> shift);
+    }
+}
+
+void Cpu::StorePartial(uint32_t op, uint64_t vaddr, uint32_t rt)
+{
+    // SWL, SWR, SDL and SDR store part of the register into an aligned word or doubleword, as a series of naturally
+    // aligned stores.
+    const bool is_double = op == 0x2C || op == 0x2D;
+    const uint32_t size = is_double ? 8 : 4;
+    const uint32_t offset = static_cast<uint32_t>(vaddr & (size - 1));
+    const bool left = op == 0x2A || op == 0x2C;
+    const uint64_t value = is_double ? gpr_[rt] : (gpr_[rt] & 0xFFFFFFFF);
+
+    // The bytes of the block to write, and the block's contents for them.
+    uint32_t first = 0;
+    uint32_t last = 0;
+    uint64_t block = 0;
+    if (left)
+    {
+        first = offset;
+        last = size - 1;
+        block = offset == 0 ? value : value >> (8 * offset);
+    }
+    else
+    {
+        first = 0;
+        last = offset;
+        block = offset == size - 1 ? value : value << (8 * (size - 1 - offset));
+    }
+
+    // The exception for an unmapped address reports the address itself, not the aligned block's.
+    uint32_t paddr = 0;
+    if (!Translate(vaddr, Access::kStore, paddr))
+    {
+        return;
+    }
+
+    paddr &= ~(size - 1);
+
+    uint32_t position = first;
+    while (position <= last)
+    {
+        // The largest aligned piece that starts here and fits.
+        uint32_t piece = size;
+        while (piece > 1 && ((position & (piece - 1)) != 0 || position + piece - 1 > last))
+        {
+            piece /= 2;
+        }
+
+        const uint32_t shift = 8 * (size - position - piece);
+        const uint64_t mask = piece == 8 ? ~uint64_t{0} : ((uint64_t{1} << (8 * piece)) - 1);
+        system_.WriteBus(paddr + position, (block >> shift) & mask, static_cast<int>(piece));
+        position += piece;
     }
 }
 

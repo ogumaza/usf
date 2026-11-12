@@ -17,12 +17,15 @@
 // - Each channel of a song loops separately. At 0x802F1254 the library has reached the end of a loop, with its count in
 //   v1, the channel in a0 and the loop's depth in a2. A count of 0xFF repeats for ever.
 
+#include <iterator>
+
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -34,6 +37,7 @@ constexpr uint32_t kSetTempo = 0x802ECBCC;
 // A track's number holds the song's place in the table, and a second version above it.
 constexpr uint16_t kPlaceMask = 0xFF;
 constexpr int kVersionShift = 8;
+constexpr uint32_t kAllMask = 0xFFFFFFFF;
 constexpr uint32_t kTroBabyM = 0x2A;
 constexpr uint32_t kTroMario = 0x2F;
 constexpr uint32_t kTroWalui = 0x3A;
@@ -77,7 +81,7 @@ constexpr double kSongSeconds[] = {
     0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
 };
 
-constexpr double kFadeSeconds = 10.0;
+static_assert(std::size(kSongSeconds) == std::size(kSongs));
 
 } // namespace
 
@@ -88,7 +92,7 @@ GameProfile NusNm8eUsa()
     profile.serial = "NUS-NM8E-USA";
     profile.sha1 = "999047f07cec931ffbdcc7b33b8502ef602807ee";
     profile.year = "2000";
-    profile.sound_driver = "Software Creations' music library";
+    profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;
 
     profile.snapshot_address = kSelectSong;
@@ -104,8 +108,9 @@ GameProfile NusNm8eUsa()
     {
         GameCall call;
         call.function = kSetTempo;
+        // The function changes the tempo of the song that plays. It doesn't read a0.
         call.arguments = {{.value = 0}, {.value = tempo.scale}};
-        call.track_mask = 0xFFFFFFFF;
+        call.track_mask = kAllMask;
         call.track_value = tempo.number;
         call.frames = kTempoFrames;
         driver.frame_calls.push_back(call);
@@ -115,7 +120,7 @@ GameProfile NusNm8eUsa()
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 6, .track_register = 4, .count_register = 3});
+        {.address = kLoopEnd, .target_register = mips::kA2, .track_register = mips::kA0, .count_register = mips::kV1});
 
     uint32_t number = 0;
     for (const char* name : kSongs)
@@ -126,7 +131,7 @@ GameProfile NusNm8eUsa()
         if (kSongSeconds[track.number] > 0.0)
         {
             track.length_seconds = kSongSeconds[track.number];
-            track.fade_seconds = kFadeSeconds;
+            track.fade_seconds = kMeasuredFadeSeconds;
         }
         profile.tracks.push_back(track);
 

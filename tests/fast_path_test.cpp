@@ -7,91 +7,72 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
+#include <vector>
 
 #include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 
-#include "n64/constants.h"
 #include "n64/system.h"
+#include "rip/mips.h"
+#include "test_programs.h"
 
 namespace
 {
 
+namespace mips = usf::rip::mips;
+
+using mips::kA0;
+using mips::kA1;
+using mips::kAt;
+using mips::kRa;
+using mips::kT0;
+using mips::kT1;
+using mips::kT2;
+using mips::kT3;
+using mips::kV0;
+using mips::kV1;
+using mips::kZero;
 using usf::n64::Cpu;
 using usf::n64::System;
+using usf::testing::kCode;
+using usf::testing::kKseg0Address;
+using usf::testing::kStatusCu0And1;
+using usf::testing::SetOptions;
 
-constexpr uint32_t kCode = 0x1000;
-constexpr uint64_t kKseg0 = 0xFFFFFFFF80000000ull;
 constexpr uint64_t kNever = 0xFFFFFFFFFFFFFFF0ull;
 constexpr uint32_t kData = 0x4000;
 constexpr uint32_t kCheckedMemory = 0x10000;
+constexpr uint32_t kBreak = 0x0000000D;
 
-// Registers.
-constexpr int kAt = 1;
-constexpr int kV0 = 2;
-constexpr int kV1 = 3;
-constexpr int kA0 = 4;
-constexpr int kA1 = 5;
-constexpr int kT0 = 8;
-constexpr int kT1 = 9;
-constexpr int kT2 = 10;
-constexpr int kT3 = 11;
-constexpr int kRa = 31;
+// LUI and ORI come from the encoder. SignedAddiu is the encoder ADDIU with a signed immediate. The programs build the
+// other instructions from their fields: SPECIAL instructions, and instructions with an immediate.
+using mips::Lui;
+using mips::Ori;
 
-constexpr uint32_t Special(uint32_t funct, int rs, int rt, int rd, int sa = 0)
+uint32_t SignedAddiu(mips::Register rt, mips::Register rs, int16_t value)
 {
-    return (static_cast<uint32_t>(rs) << 21) | (static_cast<uint32_t>(rt) << 16) | (static_cast<uint32_t>(rd) << 11) |
-           (static_cast<uint32_t>(sa) << 6) | funct;
+    return mips::Addiu(rt, rs, static_cast<uint16_t>(value));
 }
 
-constexpr uint32_t Immediate(uint32_t op, int rs, int rt, uint32_t value)
+constexpr uint32_t Special(uint32_t funct, uint32_t rs, uint32_t rt, uint32_t rd, uint32_t sa = 0)
 {
-    return (op << 26) | (static_cast<uint32_t>(rs) << 21) | (static_cast<uint32_t>(rt) << 16) | (value & 0xFFFF);
+    return (rs << 21) | (rt << 16) | (rd << 11) | (sa << 6) | funct;
+}
+
+constexpr uint32_t Immediate(uint32_t op, uint32_t rs, uint32_t rt, uint32_t value)
+{
+    return (op << 26) | (rs << 21) | (rt << 16) | (value & 0xFFFF);
 }
 
 // Branch offsets count instructions from the delay slot.
-constexpr uint32_t Beq(int rs, int rt, int offset)
+constexpr uint32_t Beq(uint32_t rs, uint32_t rt, int offset)
 {
     return Immediate(0x04, rs, rt, static_cast<uint32_t>(offset));
 }
 
-constexpr uint32_t Bne(int rs, int rt, int offset)
+constexpr uint32_t Bne(uint32_t rs, uint32_t rt, int offset)
 {
     return Immediate(0x05, rs, rt, static_cast<uint32_t>(offset));
-}
-
-constexpr uint32_t Addiu(int rt, int rs, int value)
-{
-    return Immediate(0x09, rs, rt, static_cast<uint32_t>(value));
-}
-
-constexpr uint32_t Lui(int rt, uint32_t value)
-{
-    return Immediate(0x0F, 0, rt, value);
-}
-
-constexpr uint32_t Ori(int rt, int rs, uint32_t value)
-{
-    return Immediate(0x0D, rs, rt, value);
-}
-
-constexpr uint32_t Nop()
-{
-    return 0;
-}
-
-usf::n64::Options SetOptions()
-{
-    usf::n64::Options options;
-    options.timing = usf::n64::Timing::kLegacy;
-    options.timer_interrupt = true;
-    options.ai_delay = false;
-    options.rcp_delays = false;
-    options.fpu_traps = false;
-    options.exact_events = false;
-
-    return options;
 }
 
 void CheckSameState(const System& fast, const System& slow)
@@ -117,14 +98,21 @@ void CheckSameState(const System& fast, const System& slow)
     XSFLIB_CHECK(std::equal(memory_a.begin(), memory_a.end(), memory_b.begin()));
 }
 
+// Puts `program` at `address` and moves the CPU to it.
+void LoadProgram(System& system, uint32_t address, const std::vector<uint32_t>& program)
+{
+    usf::testing::WriteProgram(system, address, program);
+    system.GetCpu().SetPc(kKseg0Address + address);
+}
+
 // Runs a program from `address` in both systems, for about `instructions` instructions in all. No slice runs more than
 // `largest_slice` instructions. Returns v0 at the end.
-uint64_t CheckProgram(std::initializer_list<uint32_t> program, uint64_t instructions,
+uint64_t CheckProgram(const std::vector<uint32_t>& program, uint64_t instructions,
                       const std::function<void(System&)>& setup = nullptr, uint32_t address = kCode,
                       uint64_t largest_slice = ~uint64_t{0})
 {
-    System fast(SetOptions());
-    System slow(SetOptions());
+    System fast(SetOptions(true));
+    System slow(SetOptions(true));
     slow.AddBreakpoint(kNever);
     for (System* system : {&fast, &slow})
     {
@@ -139,13 +127,7 @@ uint64_t CheckProgram(std::initializer_list<uint32_t> program, uint64_t instruct
             setup(*system);
         }
 
-        uint32_t at = address;
-        for (uint32_t word : program)
-        {
-            xsflib::StoreBe32(system->Rdram().data() + at, word);
-            at += 4;
-        }
-        system->GetCpu().SetPc(kKseg0 + address);
+        LoadProgram(*system, address, program);
     }
 
     const uint64_t ticks = fast.TicksPerInstruction();
@@ -169,7 +151,7 @@ void Arithmetic()
         {
             Lui(kT0, 0x8765),
             Ori(kT0, kT0, 0x4321),
-            Addiu(kT1, 0, -3),
+            SignedAddiu(kT1, kZero, -3),
             Special(0x00, 0, kT0, kV0, 4),     // SLL
             Special(0x02, 0, kT0, kV1, 4),     // SRL
             Special(0x03, 0, kT0, kA0, 4),     // SRA
@@ -204,67 +186,67 @@ void Arithmetic()
             Immediate(0x0C, kT0, kT3, 0xFFFF), // ANDI
             Immediate(0x0E, kT0, kV0, 0xFFFF), // XORI
             Special(0x21, kT0, kT1, 0),        // ADDU to register 0.
-            Addiu(0, kT0, 1),                  // ADDIU to register 0.
-            Nop(),
+            SignedAddiu(kZero, kT0, 1),        // ADDIU to register 0.
+            mips::kNop,
         },
         60);
 }
 
 void Branches()
 {
-    // Each branch is followed by a delay slot that counts, and an instruction that a taken branch skips. The offsets
-    // of 2 jump over that instruction.
+    // Each branch is followed by a delay slot that counts, and an instruction that a taken branch skips. The offsets of
+    // 2 jump over that instruction.
     CheckProgram(
         {
-            Addiu(kT0, 0, 1),
-            Addiu(kT1, 0, -1),
+            SignedAddiu(kT0, kZero, 1),
+            SignedAddiu(kT1, kZero, -1),
             Beq(kT0, kT0, 2), // Taken.
-            Addiu(kV0, kV0, 1),
-            Addiu(kV0, kV0, 0x10),
+            SignedAddiu(kV0, kV0, 1),
+            SignedAddiu(kV0, kV0, 0x10),
             Bne(kT0, kT0, 2), // Not taken.
-            Addiu(kV0, kV0, 2),
-            Addiu(kV0, kV0, 0x20),
+            SignedAddiu(kV0, kV0, 2),
+            SignedAddiu(kV0, kV0, 0x20),
             Immediate(0x06, kT1, 0, 2), // BLEZ, taken.
-            Addiu(kV1, kV1, 1),
-            Addiu(kV1, kV1, 0x10),
+            SignedAddiu(kV1, kV1, 1),
+            SignedAddiu(kV1, kV1, 0x10),
             Immediate(0x07, kT1, 0, 2), // BGTZ, not taken.
-            Addiu(kV1, kV1, 2),
-            Addiu(kV1, kV1, 0x20),
+            SignedAddiu(kV1, kV1, 2),
+            SignedAddiu(kV1, kV1, 0x20),
             Immediate(0x01, kT1, 0, 2), // BLTZ, taken.
-            Addiu(kA0, kA0, 1),
-            Addiu(kA0, kA0, 0x10),
+            SignedAddiu(kA0, kA0, 1),
+            SignedAddiu(kA0, kA0, 0x10),
             Immediate(0x01, kT1, 1, 2), // BGEZ, not taken.
-            Addiu(kA0, kA0, 2),
-            Addiu(kA0, kA0, 0x20),
+            SignedAddiu(kA0, kA0, 2),
+            SignedAddiu(kA0, kA0, 0x20),
             Immediate(0x14, kT0, kT0, 2), // BEQL, taken.
-            Addiu(kA1, kA1, 1),
-            Addiu(kA1, kA1, 0x10),
+            SignedAddiu(kA1, kA1, 1),
+            SignedAddiu(kA1, kA1, 0x10),
             Immediate(0x15, kT0, kT0, 2), // BNEL, not taken: the slot doesn't run.
-            Addiu(kA1, kA1, 2),
-            Addiu(kA1, kA1, 0x20),
+            SignedAddiu(kA1, kA1, 2),
+            SignedAddiu(kA1, kA1, 0x20),
             Immediate(0x16, kT0, 0, 2), // BLEZL, not taken.
-            Addiu(kT2, kT2, 1),
+            SignedAddiu(kT2, kT2, 1),
             Immediate(0x17, kT0, 0, 2), // BGTZL, taken.
-            Addiu(kT2, kT2, 2),
-            Addiu(kT2, kT2, 0x20),
+            SignedAddiu(kT2, kT2, 2),
+            SignedAddiu(kT2, kT2, 0x20),
             Immediate(0x01, kT1, 2, 2), // BLTZL, taken.
-            Addiu(kT3, kT3, 1),
-            Addiu(kT3, kT3, 0x10),
+            SignedAddiu(kT3, kT3, 1),
+            SignedAddiu(kT3, kT3, 0x10),
             Immediate(0x01, kT1, 3, 2), // BGEZL, not taken.
-            Addiu(kT3, kT3, 2),
-            Addiu(kT3, kT3, 0x20),
+            SignedAddiu(kT3, kT3, 2),
+            SignedAddiu(kT3, kT3, 0x20),
             (0x03u << 26) | ((kCode + 42 * 4) >> 2), // JAL
-            Addiu(kAt, 0, 7),
-            Addiu(kAt, 0, 8),                        // Back here from the JR below.
+            SignedAddiu(kAt, kZero, 7),
+            SignedAddiu(kAt, kZero, 8),              // Back here from the JR below.
             (0x02u << 26) | ((kCode + 44 * 4) >> 2), // J to the JALR's set-up.
-            Nop(),
+            mips::kNop,
             Special(0x08, kRa, 0, 0), // JR
-            Addiu(kAt, kAt, 1),
+            SignedAddiu(kAt, kAt, 1),
             Lui(kT0, 0x8000), // The JALR's target is the last NOP.
             Ori(kT0, kT0, kCode + 48 * 4),
             Special(0x09, kT0, 0, kV0), // JALR
-            Addiu(kAt, kAt, 0x10),
-            Nop(),
+            SignedAddiu(kAt, kAt, 0x10),
+            mips::kNop,
         },
         80);
 }
@@ -273,7 +255,7 @@ void LoadsAndStores()
 {
     const auto base = [](System& system)
     {
-        system.GetCpu().SetGpr(kT0, kKseg0 + kData);
+        system.GetCpu().SetGpr(kT0, kKseg0Address + kData);
         system.GetCpu().SetGpr(kT1, 0x1122334455667788ull);
     };
     CheckProgram(
@@ -294,15 +276,20 @@ void LoadsAndStores()
         12, base);
 
     // Device registers: MI_VERSION's word by a load, and a store to MI_MASK.
-    CheckProgram({Lui(kT0, 0xA430), Immediate(0x23, kT0, kV0, 4), Immediate(0x2B, kT0, 0, 0xC), Nop()}, 4);
+    CheckProgram({Lui(kT0, 0xA430), Immediate(0x23, kT0, kV0, 4), Immediate(0x2B, kT0, 0, 0xC), mips::kNop}, 4);
+
+    // CACHE changes nothing that the core models. The short path runs it as a NOP.
+    CheckProgram(
+        {Immediate(0x2F, kT0, 0x19, 0), SignedAddiu(kV0, kZero, 1), Immediate(0x2F, kT0, 0x00, 0x10), mips::kNop}, 4,
+        base);
 
     // Code that writes the instruction after it: the new instruction must run.
     const auto patch = [](System& system)
     {
-        system.GetCpu().SetGpr(kT0, kKseg0 + kCode + 2 * 4);
-        system.GetCpu().SetGpr(kT1, Addiu(kV0, 0, 0x55));
+        system.GetCpu().SetGpr(kT0, kKseg0Address + kCode + 2 * 4);
+        system.GetCpu().SetGpr(kT1, SignedAddiu(kV0, kZero, 0x55));
     };
-    CheckProgram({Immediate(0x2B, kT0, kT1, 0), Nop(), Addiu(kV0, 0, 0x11), Nop()}, 8, patch);
+    CheckProgram({Immediate(0x2B, kT0, kT1, 0), mips::kNop, SignedAddiu(kV0, kZero, 0x11), mips::kNop}, 8, patch);
 }
 
 void PageEdges()
@@ -312,13 +299,13 @@ void PageEdges()
     constexpr uint32_t kPageEnd = 0x2000;
     CheckProgram(
         {
-            Addiu(kV0, 0, 1),
-            Addiu(kV0, kV0, 1),
-            Addiu(kV0, kV0, 1),
+            SignedAddiu(kV0, kZero, 1),
+            SignedAddiu(kV0, kV0, 1),
+            SignedAddiu(kV0, kV0, 1),
             Beq(0, 0, 2),
-            Addiu(kV1, 0, 2),
-            Addiu(kV1, 0, 3),
-            Addiu(kA0, 0, 4),
+            SignedAddiu(kV1, kZero, 2),
+            SignedAddiu(kV1, kZero, 3),
+            SignedAddiu(kA0, kZero, 4),
         },
         12, nullptr, kPageEnd - 4 * 4);
 }
@@ -328,7 +315,7 @@ void Cop1(uint32_t status)
     const auto setup = [status](System& system)
     {
         system.GetCpu().SetCop0(usf::n64::kCop0Status, status);
-        system.GetCpu().SetGpr(kT0, kKseg0 + kData);
+        system.GetCpu().SetGpr(kT0, kKseg0Address + kData);
         system.GetCpu().SetGpr(kT1, 0x41200000);
     };
     CheckProgram(
@@ -344,18 +331,18 @@ void Cop1(uint32_t status)
             Immediate(0x39, kT0, 4, 0x104),                        // SWC1 from the even register.
             Immediate(0x3D, kT0, 7, 0x108),                        // SDC1 from an odd register.
             (0x11u << 26) | (8u << 21) | (0u << 16) | 2u,          // BC1F, taken: the condition bit is clear.
-            Addiu(kA0, 0, 1),
-            Addiu(kA0, 0, 2),
+            SignedAddiu(kA0, kZero, 1),
+            SignedAddiu(kA0, kZero, 2),
             (0x11u << 26) | (8u << 21) | (1u << 16) | 2u, // BC1T, not taken.
-            Addiu(kA1, 0, 1),
-            Addiu(kA1, 0, 2),
+            SignedAddiu(kA1, kZero, 1),
+            SignedAddiu(kA1, kZero, 2),
             (0x11u << 26) | (8u << 21) | (3u << 16) | 2u, // BC1TL, not taken: the slot doesn't run.
-            Addiu(kT2, 0, 1),
-            Addiu(kT2, 0, 2),
+            SignedAddiu(kT2, kZero, 1),
+            SignedAddiu(kT2, kZero, 2),
             (0x11u << 26) | (8u << 21) | (2u << 16) | 2u, // BC1FL, taken.
-            Addiu(kT3, 0, 1),
-            Addiu(kT3, 0, 2),
-            Nop(),
+            SignedAddiu(kT3, kZero, 1),
+            SignedAddiu(kT3, kZero, 2),
+            mips::kNop,
         },
         30, setup);
 }
@@ -368,49 +355,78 @@ void Loops()
     {
         system.Schedule(System::Event::kVi, 4001);
         system.GetCpu().SetGpr(kT1, 0x1234);
-        system.GetCpu().SetGpr(kA0, kKseg0 + kData + 8);
+        system.GetCpu().SetGpr(kA0, kKseg0Address + kData + 8);
     };
 
     // A poll of memory that never changes: lui, lbu, branch, a NOP.
-    CheckProgram({Lui(kV0, 0x8000), Immediate(0x24, kV0, kV0, kData + 8), Beq(kV0, 0, -3), Nop()}, kInstructions,
+    CheckProgram({Lui(kV0, 0x8000), Immediate(0x24, kV0, kV0, kData + 8), Beq(kV0, 0, -3), mips::kNop}, kInstructions,
                  with_event);
 
     // A branch to itself with a store in its delay slot.
     CheckProgram({Beq(0, 0, -1), Immediate(0x2B, kA0, kT1, 0)}, kInstructions, with_event);
 
     // A branch to itself with an instruction in its slot that changes a register, and an idle loop.
-    CheckProgram({Beq(0, 0, -1), Addiu(kV1, kV1, 1)}, kInstructions, with_event);
-    CheckProgram({Beq(0, 0, -1), Nop()}, kInstructions, with_event);
+    CheckProgram({Beq(0, 0, -1), SignedAddiu(kV1, kV1, 1)}, kInstructions, with_event);
+    CheckProgram({Beq(0, 0, -1), mips::kNop}, kInstructions, with_event);
 
     // A loop that counts, with the count in the delay slot and with its end in sight.
-    CheckProgram(
-        {Addiu(kT2, 0, 500), Addiu(kT2, kT2, -1), Bne(kT2, 0, -2), Addiu(kV1, kV1, 1), Addiu(kV0, 0, 9), Nop()},
-        kInstructions, with_event);
+    CheckProgram({SignedAddiu(kT2, kZero, 500), SignedAddiu(kT2, kT2, -1), Bne(kT2, 0, -2), SignedAddiu(kV1, kV1, 1),
+                  SignedAddiu(kV0, kZero, 9), mips::kNop},
+                 kInstructions, with_event);
 
     // A loop that stores what it counts, and reads it back.
-    CheckProgram({Immediate(0x23, kA0, kV0, 0), Addiu(kV0, kV0, 1), Immediate(0x2B, kA0, kV0, 0), Beq(0, 0, -4), Nop()},
+    CheckProgram({Immediate(0x23, kA0, kV0, 0), SignedAddiu(kV0, kV0, 1), Immediate(0x2B, kA0, kV0, 0), Beq(0, 0, -4),
+                  mips::kNop},
                  kInstructions, with_event);
 
     // A loop that counts in one register while another stays the same.
-    CheckProgram({Addiu(kV0, kV0, 1), Lui(kV1, 0x1234), Beq(0, 0, -3), Nop()}, kInstructions, with_event);
+    CheckProgram({SignedAddiu(kV0, kV0, 1), Lui(kV1, 0x1234), Beq(0, 0, -3), mips::kNop}, kInstructions, with_event);
 
     // A BREAK after a check point: it moves Count from that point's time. The branch and its slot run in one slice.
-    CheckProgram({Nop(), Nop(), Nop(), Beq(0, 0, 0), Nop(), Nop(), Nop(), 0x0000000D, Addiu(kV0, 0, 1), Nop()},
+    CheckProgram({mips::kNop, mips::kNop, mips::kNop, Beq(0, 0, 0), mips::kNop, mips::kNop, mips::kNop, kBreak,
+                  SignedAddiu(kV0, kZero, 1), mips::kNop},
                  kInstructions, with_event);
 
     // Registers that settle after a pass: v1 takes v0's old value.
-    CheckProgram({Special(0x21, kV0, 0, kV1), Immediate(0x24, kA0, kV0, 0), Beq(0, 0, -3), Nop()}, kInstructions,
+    CheckProgram({Special(0x21, kV0, 0, kV1), Immediate(0x24, kA0, kV0, 0), Beq(0, 0, -3), mips::kNop}, kInstructions,
                  with_event);
 
     // A poll of a device that the short path leaves to Step: AI_LEN.
-    CheckProgram({Lui(kV0, 0xA450), Immediate(0x23, kV0, kV1, 0x04), Beq(0, 0, -3), Nop()}, kInstructions, with_event);
+    CheckProgram({Lui(kV0, 0xA450), Immediate(0x23, kV0, kV1, 0x04), Beq(0, 0, -3), mips::kNop}, kInstructions,
+                 with_event);
 
     // A short loop that the code leaves and enters again in the same page. Its count starts at 2 on each entry, so its
     // branch is taken in the first pass only. That pass leaves the registers as the same pass of the entry before did.
     // The code between the entries counts in v0, and its branch back is too long for a wait.
-    CheckProgram({Addiu(kT0, 0, 2), Addiu(kT0, kT0, -1), Bne(kT0, 0, -2), Nop(), Addiu(kV0, kV0, 1), Nop(), Nop(),
-                  Nop(), Nop(), Beq(0, 0, -10), Nop()},
+    CheckProgram({SignedAddiu(kT0, kZero, 2), SignedAddiu(kT0, kT0, -1), Bne(kT0, 0, -2), mips::kNop,
+                  SignedAddiu(kV0, kV0, 1), mips::kNop, mips::kNop, mips::kNop, mips::kNop, Beq(0, 0, -10), mips::kNop},
                  kInstructions, with_event);
+}
+
+// The VI's registers through KSEG1, for the programs that poll VI_CURRENT.
+constexpr uint16_t kViBase = 0xA440;
+constexpr uint32_t kViCurrent = 0x10;
+constexpr uint32_t kViStatus = 0x00;
+constexpr uint32_t kViSync = 0x18;
+constexpr uint32_t kSerrate = 0x40;
+
+// A loop that waits until the half-line falls back, counts the field in v0 and waits again. t0 holds kViBase << 16.
+std::vector<uint32_t> FieldWaitLoop()
+{
+    const uint32_t read = Immediate(0x23, kT0, kT1, kViCurrent);
+    const uint32_t keep = Special(0x25, kT1, 0, kT3);
+    const uint32_t fell = Special(0x2B, kT1, kT3, kT2);
+
+    return {read, keep, read, fell, Beq(kT2, 0, -4), mips::kNop, SignedAddiu(kV0, kV0, 1), Beq(0, 0, -7), mips::kNop};
+}
+
+// `prefix`, then FieldWaitLoop().
+std::vector<uint32_t> WithFieldWait(std::vector<uint32_t> prefix)
+{
+    const std::vector<uint32_t> loop = FieldWaitLoop();
+    prefix.insert(prefix.end(), loop.begin(), loop.end());
+
+    return prefix;
 }
 
 // Polls of VI_CURRENT. The short path moves the clock over them one half-line at a time. Each run lasts several fields,
@@ -420,13 +436,8 @@ void ViPolls()
     constexpr uint64_t kInstructions = 2000000;
     constexpr uint64_t kLargestSlice = 7919;
     constexpr uint64_t kFields = 3;
-    constexpr uint32_t kVBase = 0xA440;
-    constexpr uint32_t kVCurrent = 0x10;
-    constexpr uint32_t kVStatus = 0x00;
-    constexpr uint32_t kVSync = 0x18;
-    constexpr uint32_t kSerrate = 0x40;
 
-    const uint32_t read = Immediate(0x23, kT0, kT1, kVCurrent);
+    const uint32_t read = Immediate(0x23, kT0, kT1, kViCurrent);
     const uint32_t keep = Special(0x25, kT1, 0, kT3);
     const uint32_t fell = Special(0x2B, kT1, kT3, kT2);
 
@@ -436,76 +447,64 @@ void ViPolls()
     };
 
     // A wait until the half-line falls back.
-    XSFLIB_CHECK(CheckProgram({Lui(kT0, kVBase), read, keep, read, fell, Beq(kT2, 0, -4), Nop(), Addiu(kV0, kV0, 1),
-                               Beq(0, 0, -7), Nop()},
-                              kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
+    XSFLIB_CHECK(CheckProgram(WithFieldWait({Lui(kT0, kViBase)}), kInstructions, nullptr, kCode, kLargestSlice) >=
+                 kFields);
 
     // The same wait with its read in the delay slot.
-    XSFLIB_CHECK(CheckProgram({Lui(kT0, kVBase), read, fell, keep, Beq(kT2, 0, -3), read, Addiu(kV0, kV0, 1),
-                               Beq(0, 0, -6), Nop()},
+    XSFLIB_CHECK(CheckProgram({Lui(kT0, kViBase), read, fell, keep, Beq(kT2, 0, -3), read, SignedAddiu(kV0, kV0, 1),
+                               Beq(0, 0, -6), mips::kNop},
                               kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
 
     // V_SYNC sets a field's length.
-    XSFLIB_CHECK(CheckProgram({Lui(kT0, kVBase), Addiu(kA0, 0, 311), write(kVSync), read, keep, read, fell,
-                               Beq(kT2, 0, -4), Nop(), Addiu(kV0, kV0, 1), Beq(0, 0, -7), Nop()},
+    XSFLIB_CHECK(CheckProgram(WithFieldWait({Lui(kT0, kViBase), SignedAddiu(kA0, kZero, 311), write(kViSync)}),
                               kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
 
     // In the interlaced modes, bit 0 of the half-line gives the field.
-    XSFLIB_CHECK(CheckProgram({Lui(kT0, kVBase), Addiu(kA0, 0, kSerrate), write(kVStatus), read, keep, read, fell,
-                               Beq(kT2, 0, -4), Nop(), Addiu(kV0, kV0, 1), Beq(0, 0, -7), Nop()},
+    XSFLIB_CHECK(CheckProgram(WithFieldWait({Lui(kT0, kViBase), SignedAddiu(kA0, kZero, kSerrate), write(kViStatus)}),
                               kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
 
     // A wait for one half-line, then a wait for the next.
-    XSFLIB_CHECK(CheckProgram({Lui(kT0, kVBase), Addiu(kT3, 0, 100), read, Bne(kT1, kT3, -2), Nop(), Addiu(kV0, kV0, 1),
-                               read, Beq(kT1, kT3, -2), Nop(), Beq(0, 0, -8), Nop()},
-                              kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
+    XSFLIB_CHECK(
+        CheckProgram({Lui(kT0, kViBase), SignedAddiu(kT3, kZero, 100), read, Bne(kT1, kT3, -2), mips::kNop,
+                      SignedAddiu(kV0, kV0, 1), read, Beq(kT1, kT3, -2), mips::kNop, Beq(0, 0, -8), mips::kNop},
+                     kInstructions, nullptr, kCode, kLargestSlice) >= kFields);
 
     // A read whose value the loop drops, so that nothing changes in the registers from one half-line to the next.
-    CheckProgram({Lui(kT0, kVBase), read, Addiu(kT1, 0, 5), Beq(0, 0, -3), Nop()}, kInstructions, nullptr, kCode,
-                 kLargestSlice);
+    CheckProgram({Lui(kT0, kViBase), read, SignedAddiu(kT1, kZero, 5), Beq(0, 0, -3), mips::kNop}, kInstructions,
+                 nullptr, kCode, kLargestSlice);
 
     // A BREAK moves Count from the time of the last device read.
-    CheckProgram(
-        {Lui(kT0, kVBase), Nop(), Beq(0, 0, 0), Nop(), read, Nop(), Nop(), 0x0000000D, Addiu(kV0, kV0, 1), Nop()},
-        kInstructions, nullptr, kCode, kLargestSlice);
+    CheckProgram({Lui(kT0, kViBase), mips::kNop, Beq(0, 0, 0), mips::kNop, read, mips::kNop, mips::kNop, kBreak,
+                  SignedAddiu(kV0, kV0, 1), mips::kNop},
+                 kInstructions, nullptr, kCode, kLargestSlice);
 
     // A read outside KSEG1 raises what it raised before: VI_CURRENT's address with no segment bits.
-    CheckProgram({Lui(kT0, 0x0440), read, Beq(0, 0, -3), Nop()}, 2000, nullptr, kCode, kLargestSlice);
+    CheckProgram({Lui(kT0, 0x0440), read, Beq(0, 0, -3), mips::kNop}, 2000, nullptr, kCode, kLargestSlice);
+}
 
-    // A read after the interrupt's time, in the pass during which it falls, already gets the next field's half-line.
-    // The loop then ends one pass sooner. Only a run that stops just then can show that. These runs stop at each
-    // instruction just after the first interrupt, with the loop's passes at each phase against it.
+// A read after the interrupt's time, in the pass during which it falls, already gets the next field's half-line. The
+// loop then ends one pass sooner. Only a run that stops just then can show that. These runs stop at each instruction
+// just after the first interrupt, with the loop's passes at each phase against it.
+void ViPollAtInterrupt()
+{
     constexpr int kMostNops = 4;
     constexpr uint64_t kMostExtra = 12;
+
+    const std::vector<uint32_t> wait = WithFieldWait({Lui(kT0, kViBase)});
     for (int nops = 0; nops <= kMostNops; nops++)
     {
+        std::vector<uint32_t> program(static_cast<size_t>(nops), mips::kNop);
+        program.insert(program.end(), wait.begin(), wait.end());
         for (uint64_t extra = 0; extra <= kMostExtra; extra++)
         {
-            System fast(SetOptions());
-            System slow(SetOptions());
+            System fast(SetOptions(true));
+            System slow(SetOptions(true));
             slow.AddBreakpoint(kNever);
             const uint64_t ticks = fast.TicksPerInstruction();
             const uint64_t run = fast.NextEvent() + extra * ticks;
             for (System* system : {&fast, &slow})
             {
-                uint32_t at = kCode;
-                const auto put = [&](uint32_t word)
-                {
-                    xsflib::StoreBe32(system->Rdram().data() + at, word);
-                    at += 4;
-                };
-
-                for (int i = 0; i < nops; i++)
-                {
-                    put(Nop());
-                }
-                for (const uint32_t word : {Lui(kT0, kVBase), read, keep, read, fell, Beq(kT2, 0, -4), Nop(),
-                                            Addiu(kV0, kV0, 1), Beq(0, 0, -7), Nop()})
-                {
-                    put(word);
-                }
-
-                system->GetCpu().SetPc(kKseg0 + kCode);
+                LoadProgram(*system, kCode, program);
                 system->Run(run);
             }
 
@@ -522,9 +521,12 @@ void WaitEndsInAnInterrupt()
         constexpr uint32_t kEret = 0x42000018;
         xsflib::StoreBe32(system.Rdram().data() + 0x180, kEret);
         system.GetCpu().SetCop0(usf::n64::kCop0Compare, 2000);
-        system.GetCpu().SetCop0(usf::n64::kCop0Status, 0x34008001); // The timer's line, and interrupts on.
+
+        // The timer's line (IM7, at the bit of IP7 in Cause), and interrupts on.
+        constexpr uint32_t kStatus = kStatusCu0And1 | usf::n64::kStatusFr | usf::n64::kCauseIp7 | usf::n64::kStatusIe;
+        system.GetCpu().SetCop0(usf::n64::kCop0Status, kStatus);
     };
-    CheckProgram({Lui(kV0, 0x8000), Immediate(0x24, kV0, kV0, kData + 8), Beq(kV0, 0, -3), Nop()}, 60000, setup);
+    CheckProgram({Lui(kV0, 0x8000), Immediate(0x24, kV0, kV0, kData + 8), Beq(kV0, 0, -3), mips::kNop}, 60000, setup);
 }
 
 } // namespace
@@ -538,11 +540,12 @@ int main()
                                         Branches();
                                         LoadsAndStores();
                                         PageEdges();
-                                        Cop1(0x34000000); // CU1 with FR set.
-                                        Cop1(0x30000000); // CU1 with FR clear.
-                                        Cop1(0x10000000); // COP1 unusable: the exception.
+                                        Cop1(kStatusCu0And1 | usf::n64::kStatusFr); // CU1 with FR set.
+                                        Cop1(kStatusCu0And1);                       // CU1 with FR clear.
+                                        Cop1(usf::n64::kStatusCu0);                 // COP1 unusable: the exception.
                                         Loops();
                                         ViPolls();
+                                        ViPollAtInterrupt();
                                         WaitEndsInAnInterrupt();
                                     });
 }

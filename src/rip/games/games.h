@@ -12,6 +12,11 @@
 namespace usf::rip::games
 {
 
+// The sound drivers that more than one profile gives in the usfdriver tag.
+inline constexpr const char* kSoftwareCreationsLibrary = "Software Creations' music library";
+inline constexpr const char* kCompressedSequencePlayer = "libultra compressed sequence player";
+inline constexpr const char* kSuperMario64SoundEngine = "Super Mario 64 sound engine";
+
 GameProfile Aleck64ElevenBeat();
 GameProfile Aleck64HanabiDeDoon();
 GameProfile Aleck64HiPaiParadise();

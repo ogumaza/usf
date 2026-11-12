@@ -17,21 +17,20 @@
 // - The game's scheduler thread reads the coin inputs once a frame, through the call at 0x800006CC. It reads them at
 //   0x02000007, through a TLB entry that the players refuse, and the thread faults. The ripper replaces the call with a
 //   nop. The thread of the board's video chip (0x800AC910) writes the chip through other refused TLB entries once a
-//   frame, and the input thread (0x800B1EB8) reads the board's controls through one. The ripper stops both threads.
-//   The music runs in the music library's thread.
+//   frame, and the input thread (0x800B1EB8) reads the board's controls through one. The ripper stops both threads. The
+//   music runs in the music library's thread.
 // - The main loop waits for the next frame at 0x8000141C. The snapshot takes over the main loop there, at its 852nd
 //   arrival: 16.08 s after boot. The sample banks have loaded by then, and the attract mode asks for song 11 a few
 //   frames later.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -43,24 +42,13 @@ constexpr uint32_t kReadCoins = 0x800006CC;
 constexpr uint32_t kVideoThread = 0x800AC910;
 constexpr uint32_t kInputThread = 0x800B1EB8;
 
-// RDRAM near the end that stays zero through the attract mode.
-constexpr uint32_t kDriverAddress = 0x807FF000;
-
-constexpr int kSongs = 15;
+constexpr uint32_t kSongs = 15;
 
 // Where the second pass of each song's waves ends.
-struct SongLength
-{
-    int number;
-    double seconds;
-};
-
 constexpr SongLength kSongLengths[] = {
     {0, 137.3}, {1, 117.0}, {2, 22.3},  {3, 11.9},   {4, 20.7},  {5, 18.1},   {6, 18.2},
     {7, 197.5}, {8, 150.7}, {9, 136.7}, {10, 123.0}, {11, 24.9}, {12, 147.1},
 };
-
-constexpr double kFadeSeconds = 10.0;
 
 // The board's inputs at 0xC0800004 while nothing is pressed.
 constexpr uint32_t kSystemInputs = 0x0000FFFF;
@@ -77,38 +65,25 @@ GameProfile Aleck64MagicalTetrisChallenge()
     profile.serial = "Aleck64 Magical Tetris Challenge";
     profile.sha1 = "7e357995def4078a54ba8e4486f361d631ff3329";
     profile.year = "1998";
-    profile.sound_driver = "Software Creations' music library";
+    profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.system = kSystemInputs;
 
     profile.snapshot_address = kMainLoopWait;
     profile.snapshot_hit = kWaitBeforeSong;
-    profile.quiet_tries = 1000000;
+    profile.quiet_tries = kUntilQuiet;
     profile.boot_seconds = 20.0;
-    profile.rdram_patches = {{.address = kReadCoins, .words = {0}}};
+    profile.rdram_patches = {{.address = kReadCoins, .words = {mips::kNop}}};
     profile.stop_threads = {kVideoThread, kInputThread};
 
     CallDriverOptions driver;
-    driver.address = kDriverAddress;
+    driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}}}};
     driver.frame_calls = {{.function = kFrameSound}};
     profile.driver = BuildCallDriver(driver);
 
-    for (int number = 0; number < kSongs; number++)
+    for (uint32_t number = 0; number < kSongs; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[16];
-        std::snprintf(name, sizeof(name), "Song %d", number);
-        track.name = name;
-        for (const SongLength& length : kSongLengths)
-        {
-            if (length.number == number)
-            {
-                track.length_seconds = length.seconds;
-                track.fade_seconds = kFadeSeconds;
-            }
-        }
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Song", number, TitleBase::kDecimal), kSongLengths));
     }
 
     return profile;

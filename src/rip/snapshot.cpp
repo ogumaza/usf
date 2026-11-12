@@ -5,22 +5,23 @@
 #include <array>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 #include "xsflib/bytes.h"
 #include "xsflib/sha1.h"
+#include "xsflib/text.h"
+
+#include "n64/bits.h"
+#include "n64/constants.h"
+#include "n64/save_state.h"
 
 namespace usf::rip
 {
-
 namespace
 {
 
-// The state image's layout.
-constexpr uint32_t kStateGpr = 0x050;
-constexpr uint32_t kStateRdram = 0x75C;
-
-// libultra's OSThread: the link in the queue the thread waits in, its priority, the queue, and its state. A queue
-// ends at a thread of priority -1.
+// libultra's OSThread: the link in the queue the thread waits in, its priority, the queue, and its state. A queue ends
+// at a thread of priority -1.
 constexpr uint32_t kThreadNext = 0x00;
 constexpr uint32_t kThreadPriority = 0x04;
 constexpr uint32_t kThreadQueue = 0x08;
@@ -29,25 +30,12 @@ constexpr uint16_t kThreadStopped = 1;
 constexpr uint16_t kThreadRunning = 4;
 constexpr int kMaxQueueLength = 4096;
 
-uint64_t SignExtend32(uint32_t value)
-{
-    return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(value)));
-}
-
-std::string Hex(uint32_t value)
-{
-    char text[16];
-    std::snprintf(text, sizeof(text), "0x%08X", value);
-
-    return text;
-}
-
 uint32_t ReadWord(n64::System& system, uint32_t vaddr)
 {
     std::array<uint8_t, 4> bytes{};
-    if (!system.ReadVirtual(SignExtend32(vaddr), bytes))
+    if (!system.ReadVirtual(n64::SignExtend32(vaddr), bytes))
     {
-        throw std::runtime_error("the CPU can't read " + Hex(vaddr));
+        throw std::runtime_error("the CPU can't read " + xsflib::Hex(vaddr, 8, true));
     }
 
     return xsflib::LoadBe32(bytes.data());
@@ -55,9 +43,9 @@ uint32_t ReadWord(n64::System& system, uint32_t vaddr)
 
 void WriteBytes(n64::System& system, uint32_t vaddr, std::span<const uint8_t> bytes)
 {
-    if (!system.WriteVirtual(SignExtend32(vaddr), bytes))
+    if (!system.WriteVirtual(n64::SignExtend32(vaddr), bytes))
     {
-        throw std::runtime_error("the CPU can't write " + Hex(vaddr));
+        throw std::runtime_error("the CPU can't write " + xsflib::Hex(vaddr, 8, true));
     }
 }
 
@@ -100,7 +88,7 @@ void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& sn
 {
     const uint64_t deadline =
         system.Now() + static_cast<uint64_t>(profile.boot_seconds * static_cast<double>(system.TicksPerSecond()));
-    system.AddBreakpoint(SignExtend32(profile.snapshot_address));
+    system.AddBreakpoint(n64::SignExtend32(profile.snapshot_address));
 
     int tries = 0;
     while (true)
@@ -126,7 +114,7 @@ void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& sn
                     std::snprintf(detail, sizeof(detail), " wasn't quiet at arrivals %d to %d", profile.snapshot_hit,
                                   snapshot.arrival);
                 }
-                message = "the snapshot point " + Hex(profile.snapshot_address) + detail;
+                message = "the snapshot point " + xsflib::Hex(profile.snapshot_address, 8, true) + detail;
                 std::snprintf(detail, sizeof(detail), ", and the game didn't reach it again within %g s",
                               profile.boot_seconds);
                 message += detail;
@@ -134,7 +122,8 @@ void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& sn
             else
             {
                 std::snprintf(detail, sizeof(detail), " within %g s", profile.boot_seconds);
-                message = "the game didn't reach the snapshot point " + Hex(profile.snapshot_address) + detail;
+                message = "the game didn't reach the snapshot point " + xsflib::Hex(profile.snapshot_address, 8, true) +
+                          detail;
                 if (profile.snapshot_hit > 1)
                 {
                     std::snprintf(detail, sizeof(detail), " (arrival %d of %d)", snapshot.arrival + 1,
@@ -185,7 +174,7 @@ void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& s
             throw std::runtime_error("the selector's register must be r1 to r31");
         }
 
-        snapshot.selector_offset = kStateGpr + 8 * static_cast<uint32_t>(selector.reg);
+        snapshot.selector_offset = n64::kStateGprOffset + 8 * static_cast<uint32_t>(selector.reg);
         snapshot.selector_size = 8;
         return;
     }
@@ -196,15 +185,15 @@ void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& s
         throw std::runtime_error("the selector's value must be 1, 2 or 4 bytes, aligned to its size");
     }
 
-    const auto paddr = system.GetCpu().TranslateQuiet(SignExtend32(selector.address), true);
+    const auto paddr = system.GetCpu().TranslateQuiet(n64::SignExtend32(selector.address), true);
     if (!paddr || *paddr >= system.Rdram().size())
     {
-        throw std::runtime_error("the selector " + Hex(selector.address) + " isn't in RDRAM");
+        throw std::runtime_error("the selector " + xsflib::Hex(selector.address, 8, true) + " isn't in RDRAM");
     }
 
     snapshot.selector_address = *paddr;
     snapshot.selector_value_size = selector.size;
-    snapshot.selector_offset = kStateRdram + (*paddr & ~3u);
+    snapshot.selector_offset = n64::kStateRdramOffset + (*paddr & ~3u);
     snapshot.selector_size = 4;
 }
 
@@ -233,14 +222,17 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
             throw std::runtime_error("the image's SHA-1 is " + sha1 + ", not the profile's " + profile.sha1);
         }
     }
+
     for (const RomPatch& patch : profile.rom_patches)
     {
         system.PatchRom(patch.offset, patch.bytes);
     }
+
     if (!pif_rom.empty())
     {
         system.SetPifRom(std::vector<uint8_t>(pif_rom.begin(), pif_rom.end()));
     }
+
     ConnectInput(system, profile);
 
     Snapshot snapshot;
@@ -269,7 +261,7 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
     if (profile.driver)
     {
         WriteWords(system, profile.driver->address, profile.driver->code);
-        system.GetCpu().SetPc(SignExtend32(profile.driver->address));
+        system.GetCpu().SetPc(n64::SignExtend32(profile.driver->address));
     }
 
     LocateSelector(system, profile, snapshot);
@@ -284,7 +276,7 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number)
     std::vector<uint8_t> state = snapshot.state;
     if (snapshot.selector_kind == TrackSelector::Kind::kRegister)
     {
-        xsflib::StoreLe64(state.data() + snapshot.selector_offset, SignExtend32(number));
+        xsflib::StoreLe64(state.data() + snapshot.selector_offset, n64::SignExtend32(number));
         return state;
     }
 
@@ -293,7 +285,7 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number)
     for (int i = 0; i < size; i++)
     {
         const uint32_t address = snapshot.selector_address + static_cast<uint32_t>(i);
-        state[kStateRdram + (address ^ 3)] = static_cast<uint8_t>(number >> (8 * (size - 1 - i)));
+        state[n64::kStateRdramOffset + (address ^ 3)] = static_cast<uint8_t>(number >> (8 * (size - 1 - i)));
     }
 
     return state;
@@ -302,12 +294,14 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number)
 std::vector<uint8_t> TrackState(const Snapshot& snapshot, const Track& track)
 {
     std::vector<uint8_t> state = TrackState(snapshot, track.number);
+    // RDRAM ends where DMEM and IMEM start, 8 KiB before the end of the state.
+    const size_t rdram_end = state.size() - 2 * n64::kSpMemSize;
     for (const RdramPatch& patch : track.rdram_patches)
     {
         const uint32_t offset = RdramStateOffset(patch.address);
-        if (offset + 4 * patch.words.size() > state.size())
+        if (offset + 4 * patch.words.size() > rdram_end)
         {
-            throw std::runtime_error("the patch at " + Hex(patch.address) + " runs past RDRAM");
+            throw std::runtime_error("the patch at " + xsflib::Hex(patch.address, 8, true) + " runs past RDRAM");
         }
 
         for (size_t i = 0; i < patch.words.size(); i++)
@@ -321,27 +315,27 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, const Track& track)
 
 uint32_t RdramStateOffset(uint32_t address)
 {
-    const uint32_t segment = address >> 29;
-    if (address % 4 != 0 || (segment != 4 && segment != 5))
+    if (address % 4 != 0 || address < n64::kKseg0 || address >= n64::kKseg2)
     {
-        throw std::runtime_error("the patch's address " + Hex(address) + " must be word-aligned, in KSEG0 or KSEG1");
+        throw std::runtime_error("the patch's address " + xsflib::Hex(address, 8, true) +
+                                 " must be word-aligned, in KSEG0 or KSEG1");
     }
 
-    return kStateRdram + (address & 0x1FFFFFFF);
+    return n64::kStateRdramOffset + (address & n64::kPhysicalAddressMask);
 }
 
 void StopThread(n64::System& system, uint32_t thread)
 {
     std::array<uint8_t, 2> state_bytes{};
-    if (!system.ReadVirtual(SignExtend32(thread + kThreadState), state_bytes))
+    if (!system.ReadVirtual(n64::SignExtend32(thread + kThreadState), state_bytes))
     {
-        throw std::runtime_error("the CPU can't read the thread at " + Hex(thread));
+        throw std::runtime_error("the CPU can't read the thread at " + xsflib::Hex(thread, 8, true));
     }
 
     const uint16_t state = xsflib::LoadBe16(state_bytes.data());
     if (state == kThreadRunning)
     {
-        throw std::runtime_error("the thread at " + Hex(thread) + " is running at the snapshot");
+        throw std::runtime_error("the thread at " + xsflib::Hex(thread, 8, true) + " is running at the snapshot");
     }
     if (state == kThreadStopped)
     {

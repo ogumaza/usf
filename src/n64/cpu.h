@@ -89,6 +89,15 @@ inline constexpr uint32_t kCauseIp2 = 1u << 10; // The RCP's interrupt line, fro
 inline constexpr uint32_t kCauseIp7 = 1u << 15; // The timer interrupt.
 inline constexpr uint32_t kCauseBd = 1u << 31;
 
+// What FCR0 reads: the FPU's implementation number, 0x0A, and its revision, 0x00.
+inline constexpr uint32_t kFcr0 = 0x00000A00;
+
+// The bits that FCR31 defines. With the FPU's exceptions on, a write keeps only these.
+inline constexpr uint32_t kFcr31WriteMask = 0x0183FFFF;
+
+// FCR31's condition bit. The compares set it, and BC1 tests it.
+inline constexpr uint32_t kFcr31Condition = 1u << 23;
+
 // One of the 32 TLB entries, as TLBWI and TLBWR write it.
 struct TlbEntry
 {
@@ -141,16 +150,10 @@ public:
     // Moves execution to `pc`. The next instruction runs there, outside any delay slot.
     void SetPc(uint64_t pc);
 
-    uint64_t Hi() const;
-    uint64_t Lo() const;
-    void SetHi(uint64_t value);
-    void SetLo(uint64_t value);
-
     // COP0 registers as MFC0 and DMFC0 read them. SetCop0 writes Random, BadVAddr, Context, XContext, Cause and Wired
     // directly, past MTC0's masks and side effects. SetCop0 keeps only the bits that each of these registers defines,
-    // and ignores a Random outside Wired to 31.
-    // Every other register takes the write as MTC0 would, with its masks and side effects, but without the check points
-    // of the legacy timing.
+    // and ignores a Random outside Wired to 31. Every other register takes the write as MTC0 would, with its masks and
+    // side effects, but without the check points of the legacy timing.
     uint64_t Cop0(int index) const;
     void SetCop0(int index, uint64_t value);
 
@@ -168,8 +171,8 @@ public:
     CpuState State() const;
     void SetState(const CpuState& state);
 
-    // Translates a virtual address the way the CPU would, with the current mode and ASID, without raising an
-    // exception. Returns nothing when the access would fault.
+    // Translates a virtual address the way the CPU would, with the current mode and ASID, without raising an exception.
+    // Returns nothing when the access would fault.
     std::optional<uint32_t> TranslateQuiet(uint64_t vaddr, bool write) const;
 
     // With the legacy timing: the accesses since reset through a TLB entry that maps a frame past the console's
@@ -178,7 +181,7 @@ public:
     uint64_t RefusedBoardPages() const;
 
     // Called by the system when the MI's interrupt line (Cause IP2) changes.
-    void SetInterruptLine(uint32_t cause_bit, bool raised);
+    void SetIp2(bool raised);
 
     // Called by the system when Count reaches Compare. Raises the timer interrupt when `raise` is set, and schedules
     // the next match.
@@ -215,10 +218,6 @@ public:
 
     // Whether the next instruction is in a branch's delay slot. A save state can't hold that.
     bool InDelaySlot() const;
-
-    // Whether the last instruction was a jump to itself with a delay slot that does nothing: the idle loop that most
-    // games run while they wait for an interrupt.
-    bool InIdleLoop() const;
 
 private:
     enum class TlbResult
@@ -339,7 +338,10 @@ private:
         bool not_a_wait = false;
     };
 
-    using FastPage = std::array<FastInstruction, 0x400>;
+    // A page of 4 KiB holds 0x400 instructions.
+    static constexpr uint32_t kFastPageInstructions = 0x400;
+
+    using FastPage = std::array<FastInstruction, kFastPageInstructions>;
 
     // How the current mode maps an address: kError for an address error, kTlb for a mapped address, or kDirect for an
     // unmapped segment, with the physical address in `paddr`.
@@ -359,6 +361,17 @@ private:
 
     static constexpr int kMaxWaitRegisters = 6;
 
+    // Status's KSU field, and the modes that it picks outside an exception. A value of 2 is user mode.
+    static constexpr int kStatusKsuShift = 3;
+    static constexpr uint32_t kStatusKsuMask = 3;
+    static constexpr uint32_t kKsuKernel = 0;
+    static constexpr uint32_t kKsuSupervisor = 1;
+
+    // The exception vectors, as offsets from their base.
+    static constexpr uint64_t kTlbRefillVector = 0x000;
+    static constexpr uint64_t kXtlbRefillVector = 0x080;
+    static constexpr uint64_t kGeneralVector = 0x180;
+
     // Instruction fields.
     static uint32_t Rs(uint32_t instruction);
     static uint32_t Rt(uint32_t instruction);
@@ -372,10 +385,24 @@ private:
     void Step();
     void Execute(uint32_t instruction);
     void ExecuteSpecial(uint32_t instruction);
+
+    // MULT, MULTU, DIV, DIVU and their doubleword forms, with `s` from rs and `t` from rt.
+    void ExecuteMultiplyDivide(uint32_t funct, uint64_t s, uint64_t t);
+
     void ExecuteRegimm(uint32_t instruction);
+    void TrapIf(bool condition);
     void ExecuteCop0(uint32_t instruction);
     void ExecuteCop1(uint32_t instruction);
+    void ExecuteCop1LoadStore(uint32_t instruction);
     void ExecuteLoadStore(uint32_t instruction);
+
+    // A plain load into rt, sign- or zero-extended from T.
+    template <typename T, bool kSigned>
+    void LoadInto(uint64_t vaddr, uint32_t rt);
+
+    // LWL, LWR, LDL and LDR, and SWL, SWR, SDL and SDR.
+    void LoadPartial(uint32_t op, uint64_t vaddr, uint32_t rt);
+    void StorePartial(uint32_t op, uint64_t vaddr, uint32_t rt);
 
     // Branches to `target` when `taken` is set. The delay slot runs either way, except after a likely branch that isn't
     // taken. An instruction that links writes the return address before it calls one of these.
@@ -383,19 +410,34 @@ private:
     void BranchLikely(bool taken, uint64_t target);
     uint64_t BranchTarget(uint32_t instruction) const;
 
+    // Status's KSU field.
+    uint32_t Ksu() const
+    {
+        return (status_ >> kStatusKsuShift) & kStatusKsuMask;
+    }
+
+    // Whether the CPU is in kernel mode: KSU is 0, or EXL or ERL is set.
+    bool KernelMode() const
+    {
+        return (status_ & (kStatusExl | kStatusErl)) != 0 || Ksu() == kKsuKernel;
+    }
+
     // Whether 64-bit operations are allowed in the current mode: kernel mode, or the mode's 64-bit addressing bit.
     bool Allows64Bit() const;
 
     bool RequireCop1();
 
     // Exceptions. Each sets up the exception entry and moves execution to the vector.
-    void RaiseException(ExceptionCode code, uint32_t coprocessor = 0);
+    void RaiseException(ExceptionCode code, uint32_t coprocessor = 0, uint64_t vector = kGeneralVector);
     void RaiseAddressError(uint64_t vaddr, Access access);
     void RaiseTlbException(uint64_t vaddr, Access access, bool refill, bool modification);
 
     // The exception of a fetch or a load with no mapping in the tables of pages. `covered` says that an entry covers
     // the address.
     void RaisePageFault(uint64_t vaddr, Access access, bool covered);
+
+    // Moves execution to the exception vector at `address`, outside any delay slot.
+    void EnterVector(uint64_t address);
 
     void TakeInterrupt();
     void UpdateInterruptPending();
@@ -450,17 +492,21 @@ private:
     void ScheduleCompare();
 
     // COP1 (cpu_fpu.cpp). With FR clear, the moves and the loads and stores see 16 registers of 64 bits: an odd
-    // register is the high half of the even one. The operations read fs from the even register of the pair, and ft
-    // and fd from the register named.
+    // register is the high half of the even one. The operations read fs from the even register of the pair, and ft and
+    // fd from the register named.
     template <typename T>
     void ExecuteFpuFormat(uint32_t instruction);
+
+    // ADD, SUB, MUL, DIV, SQRT, ABS and NEG on `a` and `b`. The last three use `a` alone.
+    template <typename T>
+    void FpuArithmetic(uint32_t funct, T a, T b, int fd, int mode);
+
     void ExecuteFpuInteger(uint32_t instruction, bool doubleword);
     uint32_t MoveFromFpr32(int index) const;
     void MoveToFpr32(int index, uint32_t value);
     uint64_t MoveFromFpr64(int index) const;
     void MoveToFpr64(int index, uint64_t value);
     uint32_t SourceSingle(int index) const;
-    uint64_t SourceDouble(int index) const;
     void WriteFcr31(uint32_t value);
 
     // The FPU's exception checks. Each sets the cause bits, and the flag bits of the exceptions that don't trap. Each
@@ -471,7 +517,7 @@ private:
     bool FpuSubnormalTraps() const;
     bool FpuTraps() const;
     int FpuRounding() const;
-    bool FpuCheckHostFlags(int host_flags, bool conversion);
+    bool FpuCheckHostFlags(int host_flags);
     template <typename T>
     bool FpuCheckInput(T value);
     template <typename T>
@@ -482,6 +528,10 @@ private:
     void FpuCompare(uint32_t condition, T a, T b);
     template <typename T>
     void FpuConvertToInteger(uint32_t instruction, T value, bool doubleword, int rounding);
+
+    // Converts `value` to the format R on the host in rounding mode `mode`, checks the result, and writes it to fd.
+    template <typename R, typename S>
+    void ConvertAndWrite(S value, int fd, int mode);
 
     System& system_;
     uint64_t& now_;
@@ -496,10 +546,10 @@ private:
     uint64_t next_pc_ = 0;
     bool branch_pending_ = false; // The instruction at pc_ is in a delay slot.
     bool in_delay_slot_ = false;  // The running instruction is in a delay slot.
-    bool idle_loop_ = false;
-    bool late_events_ = false;  // The last run used the legacy timing of events.
-    bool event_check_ = false;  // Without exact events, check for a due event after the running instruction.
-    bool status_check_ = false; // The same after an MTC0 to Status. The test for a due event leaves the MTC0 out.
+    bool idle_loop_ = false;      // The last instruction was a jump to itself with a NOP in its delay slot.
+    bool late_events_ = false;    // The last run used the legacy timing of events.
+    bool event_check_ = false;    // Without exact events, check for a due event after the running instruction.
+    bool status_check_ = false;   // The same after an MTC0 to Status. The test for a due event leaves the MTC0 out.
 
     // COP0.
     uint32_t index_ = 0;
@@ -542,7 +592,7 @@ private:
     bool ip2_stale_ = false;     // Cause's IP2 is the one that a state holds, and it takes no interrupt.
     uint64_t count_updated_ = 0; // With the legacy timing: when Count was last brought up to date.
     std::function<void(ExceptionCode, uint64_t)> exception_hook_;
-    uint64_t cop2_latch_ = 0;
+    uint64_t cop2_latch_ = 0; // The 64-bit latch that the COP2 moves use.
 
     // A cache of the page that instructions come from, while it's in RDRAM. translation_epoch_ moves on whenever a
     // change could alter the translation.

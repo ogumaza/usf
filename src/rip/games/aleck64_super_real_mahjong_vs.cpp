@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Super Real Mahjong VS (Aleck64): the game's music, through libultra's compressed sequence player. Songs go by the
-// game's numbers for them. The game plays its music in mono or in stereo, and each mode is a set: "mono", the mode
-// that the game starts in, and "stereo".
+// game's numbers for them. The game plays its music in mono or in stereo, and each mode is a set: "mono", the mode that
+// the game starts in, and "stereo".
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
@@ -27,15 +27,14 @@
 // - The sequence reader at 0x8003E3A0 reads one track of a sequence. At 0x8003E4FC it has reached the end of a loop,
 //   with the loop's count in v1, the end's address in a2 and the track in s2. A count of 0xFF repeats for ever.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -47,13 +46,7 @@ constexpr uint32_t kStereoMode = 0;
 constexpr uint32_t kLoopEnd = 0x8003E4FC;
 constexpr uint32_t kMainLoopThread = 0x8008A9E0;
 
-// RDRAM near the end that stays zero through the attract mode.
-constexpr uint32_t kDriverAddress = 0x807FF000;
-
-constexpr int kSongs = 13;
-
-// The board's DIP switches as they leave the factory.
-constexpr uint32_t kSwitches = 0xFFDFFFFF;
+constexpr uint32_t kSongs = 13;
 
 // The set of the mode that `stereo` picks.
 GameProfile Aleck64SuperRealMahjongVsSet(bool stereo)
@@ -67,17 +60,17 @@ GameProfile Aleck64SuperRealMahjongVsSet(bool stereo)
     profile.set = stereo ? "stereo" : "mono";
     profile.sha1 = "a590216a171a61517cd07ff629d8215631c8be87";
     profile.year = "1999";
-    profile.sound_driver = "libultra compressed sequence player";
-    profile.board_inputs.switches = kSwitches;
+    profile.sound_driver = kCompressedSequencePlayer;
+    profile.board_inputs.switches = kFactorySwitches;
 
     profile.snapshot_address = kUnpackLoop;
     profile.snapshot_hit = kUnpackAfterBoot;
-    profile.quiet_tries = 1000000;
+    profile.quiet_tries = kUntilQuiet;
     profile.boot_seconds = 10.0;
     profile.stop_threads = {kMainLoopThread};
 
     CallDriverOptions driver;
-    driver.address = kDriverAddress;
+    driver.address = kAleck64DriverAddress;
     if (stereo)
     {
         driver.start_calls.push_back({.function = kSetMode, .arguments = {{.value = kStereoMode}}});
@@ -86,16 +79,11 @@ GameProfile Aleck64SuperRealMahjongVsSet(bool stereo)
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 6, .track_register = 18, .count_register = 3});
+        {.address = kLoopEnd, .target_register = mips::kA2, .track_register = mips::kS2, .count_register = mips::kV1});
 
-    for (int number = 0; number < kSongs; number++)
+    for (uint32_t number = 0; number < kSongs; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[16];
-        std::snprintf(name, sizeof(name), "Song %d", number);
-        track.name = name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Song", number, TitleBase::kDecimal)));
     }
 
     return profile;

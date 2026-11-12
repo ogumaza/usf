@@ -5,10 +5,10 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The play-sound function at 0x8031EB00 takes a sound's code in a0 and a pointer to its source's position in a1.
-//   It queues a request. The global source at 0x803331F0 plays a sound at the listener, with no pan or distance.
-// - The game-loop tick at 0x8031FD84 takes no arguments. It sets the word at 0x80332E54. The sound thread then
-//   updates the effects at its next audio frame. The game calls the tick once a frame, every second video field.
+// - The play-sound function at 0x8031EB00 takes a sound's code in a0 and a pointer to its source's position in a1. It
+//   queues a request. The global source at 0x803331F0 plays a sound at the listener, with no pan or distance.
+// - The game-loop tick at 0x8031FD84 takes no arguments. It sets the word at 0x80332E54. The sound thread then updates
+//   the effects at its next audio frame. The game calls the tick once a frame, every second video field.
 // - A code holds the bank in bits 28 to 31, flags in bits 24 to 27, the sound's number in bits 16 to 23 and its
 //   priority in bits 8 to 15. Bit 7 marks a sound that plays once. Bit 0 marks a new request. A sound without bit 7
 //   plays only while the game keeps requesting it.
@@ -21,17 +21,18 @@
 //   leaves 431 sounds. One of them, menu sound 0x10, makes no sound when played alone. The profile leaves it out too.
 //   That leaves 430 tracks, 89 of them sounds that play only while requested.
 // - The lengths come from runs of each track in usf's core: the last sound and 0.5 s more. A sound that plays only
-//   while requested is requested for 5 s. Sound 0x60 of bank 8 plays once but holds its level until the game stops
-//   it. Its track plays for 5 s and fades out over 2 s.
-// - A track's number is the sound's code. Its title gives the bank and the sound's number, and a description where
-//   one is known.
+//   while requested is requested for 5 s. Sound 0x60 of bank 8 plays once but holds its level until the game stops it.
+//   Its track plays for 5 s and fades out over 2 s.
+// - A track's number is the sound's code. Its title gives the bank and the sound's number, and a description where one
+//   is known.
+
+#include <vector>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -41,8 +42,8 @@ constexpr uint32_t kGameLoopTick = 0x8031FD84;
 constexpr uint32_t kAfterSoundReset = 0x802491D8;
 
 // The last lines of the third frame buffer (0x803DA800 to 0x80400000). The game's set-up stores the three frame
-// buffers' addresses at 0x802489C4 to 0x80248A20: 0x8038F800, 0x803B5000 and 0x803DA800. Only the RDP writes there,
-// and it draws nothing after the snapshot.
+// buffers' addresses at 0x802489C4 to 0x80248A20: 0x8038F800, 0x803B5000 and 0x803DA800. Only the RDP writes there, and
+// it draws nothing after the snapshot.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
 constexpr uint32_t kDiscrete = 0x80;
@@ -505,23 +506,23 @@ GameProfile NusNsmeUsa()
     profile.sound_effects = true;
     profile.year = "1996";
     profile.cic = n64::Cic::k6102;
-    profile.sound_driver = "Super Mario 64 sound engine";
+    profile.sound_driver = kSuperMario64SoundEngine;
 
     // The driver takes over the game thread at the first return from the sound reset. It requests the track's sound
-    // once. A sound that plays only while requested is requested again in each of the first 150 frames. Each frame
-    // ends with the game-loop tick. A frame is two fields, as in the game.
+    // once. A sound that plays only while requested is requested again in each of the first 150 frames. Each frame ends
+    // with the game-loop tick. A frame is two fields, as in the game.
     profile.snapshot_address = kAfterSoundReset;
     profile.snapshot_hit = 1;
     profile.quiet_tries = 30;
     profile.boot_seconds = 5.0;
 
-    const std::vector<CallArgument> arguments = {{.track = true}, {.value = kGlobalSource}};
+    const std::vector<CallArgument> kArguments = {{.track = true}, {.value = kGlobalSource}};
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {
-        {.function = kPlaySound, .arguments = arguments, .track_mask = kDiscrete, .track_value = kDiscrete}};
+        {.function = kPlaySound, .arguments = kArguments, .track_mask = kDiscrete, .track_value = kDiscrete}};
     driver.frame_calls = {{.function = kPlaySound,
-                           .arguments = arguments,
+                           .arguments = kArguments,
                            .track_mask = kDiscrete,
                            .track_value = 0,
                            .frames = kHeldFrames},

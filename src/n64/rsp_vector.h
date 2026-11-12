@@ -58,9 +58,6 @@ public:
     uint32_t ReadControl(int index) const;
     void WriteControl(int index, uint32_t value);
 
-    // The accumulator of a lane, as a 48-bit two's-complement value in the low bits.
-    uint64_t Accumulator(int lane) const;
-
 private:
     using Vector = std::array<uint16_t, 8>;
 
@@ -70,6 +67,7 @@ private:
     uint16_t AccHigh(int lane) const;
     uint16_t AccMid(int lane) const;
     uint16_t AccLow(int lane) const;
+    void SetAccLow(int lane, uint16_t value);
 
     // The clamps that move the accumulator into a register.
     uint16_t SaturateMid(int lane) const;

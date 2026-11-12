@@ -6,18 +6,18 @@
 #include <cstring>
 
 #include "xsflib/bytes.h"
+#include "xsflib/psf/set.h"
+
+#include "n64/constants.h"
+#include "n64/save_state.h"
 
 namespace usf
 {
-
 namespace
 {
 
 constexpr uint8_t kMarker[4] = {'S', 'R', '6', '4'};
-constexpr uint32_t kStateId = 0x23D8A6C8;
-constexpr uint32_t kRdramSize4 = 0x400000;
-constexpr uint32_t kRdramSize8 = 0x800000;
-constexpr size_t kMaxStateSize = kStateOverhead + kRdramSize8;
+constexpr size_t kMaxStateSize = kStateOverhead + n64::kRdramSize8;
 
 using xsflib::psf::Put32;
 
@@ -45,6 +45,12 @@ void WriteSection(std::vector<uint8_t>& out, const std::optional<std::vector<Chu
     Put32(out, 0);
 }
 
+// A file of a set as the loader parses it: the container, and the sections of its reserved area.
+struct ParsedFile : xsflib::psf::PsfFile
+{
+    Sections sections;
+};
+
 // Loads a set's files into the images: a file's `_lib` first, then the file, then its `_lib2`, `_lib3` and on.
 class Loader
 {
@@ -54,24 +60,76 @@ public:
     {
     }
 
-    std::optional<std::string> Load(const std::string& path, int depth, bool top)
+    std::optional<std::string> Load(const std::string& path)
     {
-        if (depth > xsflib::psf::kMaxLibDepth)
+        const auto parse =
+            [this](const std::string& file_path, const std::vector<uint8_t>& data, int depth, ParsedFile& file)
         {
-            return "the libraries nest deeper than " + std::to_string(xsflib::psf::kMaxLibDepth) + " levels";
+            return Parse(file_path, data, depth, file);
+        };
+
+        const auto add = [this](const std::string& file_path, const std::vector<uint8_t>&, int,
+                                const ParsedFile& file) -> std::optional<std::string>
+        {
+            if (auto error = Apply(file.sections))
+            {
+                return file_path + ": " + *error;
+            }
+
+            out_.sources.push_back(file_path);
+
+            return std::nullopt;
+        };
+
+        // A file counts toward the limit as soon as the walk reaches it.
+        xsflib::psf::WalkRules rules;
+        rules.too_deep = "the libraries nest deeper than " + std::to_string(xsflib::psf::kMaxLibDepth) + " levels";
+        rules.too_many = "the set has more than " + std::to_string(xsflib::psf::kMaxSetFiles) + " files";
+        rules.count_reached = true;
+        ParsedFile top;
+
+        return xsflib::psf::WalkSet(path, reader_, separators_, top, parse, add, rules);
+    }
+
+    std::optional<std::string> Finish()
+    {
+        if (!has_state_)
+        {
+            return "the set holds no save state";
         }
-        if (++files_ > xsflib::psf::kMaxSetFiles)
+        if (xsflib::LoadLe32(state_.data()) != n64::kStateId)
         {
-            return "the set has more than " + std::to_string(xsflib::psf::kMaxSetFiles) + " files";
+            return "the save state's identifier is wrong";
         }
 
-        std::vector<uint8_t> data;
-        if (!reader_(path, data))
+        const uint32_t rdram_size = xsflib::LoadLe32(state_.data() + n64::kStateRdramSizeOffset);
+        if (rdram_size != n64::kRdramSize4 && rdram_size != n64::kRdramSize8)
         {
-            return "can't read " + path;
+            return "the save state's RDRAM size is neither 4 nor 8 MiB";
         }
 
-        xsflib::psf::PsfFile file;
+        // The final size word counts. Bytes past that size are dropped.
+        state_.resize(kStateOverhead + rdram_size);
+        out_.state = std::move(state_);
+
+        // The ROM section is in LE word order: console byte A is at A XOR 3.
+        out_.rom.assign(rom_.size(), 0);
+        n64::CopyFromLeWords(rom_.data(), out_.rom.data(), rom_.size());
+
+        return std::nullopt;
+    }
+
+private:
+    static bool Flag(const xsflib::psf::Tags& tags, const std::string& name)
+    {
+        const auto it = tags.find(name);
+        return it != tags.end() && !it->second.empty();
+    }
+
+    // Parses the file at `path`, `depth` libraries down, and takes its flags. The first file gives the set its tags.
+    std::optional<std::string> Parse(const std::string& path, const std::vector<uint8_t>& data, int depth,
+                                     ParsedFile& file)
+    {
         xsflib::psf::ParseOptions options;
         options.with_program = false;
         options.version = kUsfVersion;
@@ -85,90 +143,20 @@ public:
             return path + ": a USF file holds no program";
         }
 
-        Sections sections;
-        if (auto error = ParseReservedArea(file.reserved, sections))
+        if (auto error = ParseReservedArea(file.reserved, file.sections))
         {
             return path + ": " + *error;
         }
 
-        if (top)
+        if (depth == 0)
         {
             out_.tags = file.tags;
         }
 
-        out_.enable_compare = out_.enable_compare || Flag(file.tags, "_enablecompare");
-        out_.enable_fifo_full = out_.enable_fifo_full || Flag(file.tags, "_enablefifofull");
-
-        // The library first, then this file, then the libraries that follow it.
-        const std::string dir = xsflib::psf::DirectoryOf(path, separators_);
-        if (auto lib = file.tags.find("_lib"); lib != file.tags.end() && !lib->second.empty())
-        {
-            if (auto error = Load(dir + lib->second, depth + 1, false))
-            {
-                return error;
-            }
-        }
-
-        if (auto error = Apply(sections))
-        {
-            return path + ": " + *error;
-        }
-
-        out_.sources.push_back(path);
-
-        for (int n = 2;; n++)
-        {
-            const auto lib = file.tags.find("_lib" + std::to_string(n));
-            if (lib == file.tags.end())
-            {
-                break;
-            }
-
-            if (auto error = Load(dir + lib->second, depth + 1, false))
-            {
-                return error;
-            }
-        }
+        out_.enable_compare = out_.enable_compare || Flag(file.tags, kEnableCompareTag);
+        out_.enable_fifo_full = out_.enable_fifo_full || Flag(file.tags, kEnableFifoFullTag);
 
         return std::nullopt;
-    }
-
-    std::optional<std::string> Finish()
-    {
-        if (!has_state_)
-        {
-            return "the set holds no save state";
-        }
-        if (xsflib::LoadLe32(state_.data()) != kStateId)
-        {
-            return "the save state's identifier is wrong";
-        }
-
-        const uint32_t rdram_size = xsflib::LoadLe32(state_.data() + 4);
-        if (rdram_size != kRdramSize4 && rdram_size != kRdramSize8)
-        {
-            return "the save state's RDRAM size is neither 4 nor 8 MiB";
-        }
-
-        // The final size word counts. Bytes past that size are dropped.
-        state_.resize(kStateOverhead + rdram_size);
-        out_.state = std::move(state_);
-
-        // The ROM section is in LE word order: console byte A is at A XOR 3.
-        out_.rom.assign(rom_.size(), 0);
-        for (size_t i = 0; i < rom_.size(); i++)
-        {
-            out_.rom[i] = rom_[i ^ 3];
-        }
-
-        return std::nullopt;
-    }
-
-private:
-    static bool Flag(const xsflib::psf::Tags& tags, const std::string& name)
-    {
-        const auto it = tags.find(name);
-        return it != tags.end() && !it->second.empty();
     }
 
     std::optional<std::string> Apply(const Sections& sections)
@@ -220,7 +208,6 @@ private:
     const xsflib::psf::FileReader& reader_;
     LoadedUsf& out_;
     std::string_view separators_;
-    size_t files_ = 0;
     std::vector<uint8_t> rom_; // LE word order
     std::vector<uint8_t> state_;
     bool has_state_ = false;
@@ -301,27 +288,12 @@ std::optional<std::string> ParseReservedArea(std::span<const uint8_t> reserved, 
     return std::nullopt;
 }
 
-std::vector<uint8_t> WriteUsf(const Sections& sections, const xsflib::psf::Tags& tags)
-{
-    const std::vector<uint8_t> reserved = WriteReservedArea(sections);
-    std::vector<uint8_t> out = {'P', 'S', 'F', kUsfVersion};
-    Put32(out, static_cast<uint32_t>(reserved.size()));
-    Put32(out, 0); // No program.
-    Put32(out, 0); // Its CRC-32.
-    out.insert(out.end(), reserved.begin(), reserved.end());
-
-    const std::string tag_area = xsflib::psf::FormatTagArea(tags);
-    out.insert(out.end(), tag_area.begin(), tag_area.end());
-
-    return out;
-}
-
 std::optional<std::string> LoadUsf(const std::string& path, const xsflib::psf::FileReader& reader, LoadedUsf& out,
                                    std::string_view separators)
 {
     out = {};
     Loader loader(reader, out, separators);
-    if (auto error = loader.Load(path, 0, true))
+    if (auto error = loader.Load(path))
     {
         return error;
     }

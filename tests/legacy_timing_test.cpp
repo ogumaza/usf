@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <span>
 #include <vector>
 
@@ -14,7 +13,9 @@
 #include "xsflib/testing/check.h"
 
 #include "n64/constants.h"
+#include "n64/save_state.h"
 #include "n64/system.h"
+#include "test_programs.h"
 
 namespace
 {
@@ -22,8 +23,11 @@ namespace
 using usf::n64::Cpu;
 using usf::n64::System;
 
-constexpr uint32_t kCode = 0x1000;
-constexpr uint64_t kCodeAddress = 0xFFFFFFFF80000000ull + kCode;
+using usf::testing::kCode;
+using usf::testing::kCodeAddress;
+using usf::testing::RunProgram;
+using usf::testing::SetOptions;
+using usf::testing::WriteProgram;
 
 constexpr uint32_t kMiIntr = 0x04300008;
 constexpr uint32_t kMiMask = 0x0430000C;
@@ -32,6 +36,7 @@ constexpr uint32_t kAiStatus = 0x0450000C;
 constexpr uint32_t kNop = 0x00000000;
 constexpr uint32_t kBreak = 0x0000000D;
 constexpr uint32_t kBranchOverOne = 0x10000001;   // beq zero, zero, +1
+constexpr uint32_t kBranchBackTwo = 0x1000FFFE;   // beq zero, zero, -2
 constexpr uint32_t kSetT2 = 0x240A0001;           // addiu t2, zero, 1
 constexpr uint32_t kStoreT1 = 0xAD090000;         // sw t1, 0(t0)
 constexpr uint32_t kLoadT3 = 0x8D0B0000;          // lw t3, 0(t0)
@@ -47,53 +52,16 @@ constexpr uint32_t kCodeBreakpoint = 9;
 constexpr uint32_t kStatusLine2 = 1u << 10; // IM2: allows CPU interrupt line 2.
 
 constexpr uint64_t kGeneralVector = 0xFFFFFFFF80000180ull;
-constexpr uint64_t kRefillVector = 0xFFFFFFFF80000000ull;
+constexpr uint64_t kRefillVector = usf::testing::kKseg0Address;
 
-constexpr size_t kOffsetTlb = 0x49C; // In a state.
 constexpr size_t kTlbEntries = 32;
 constexpr size_t kTlbEntrySize = 20;
 
 constexpr uint64_t kValid = 2;
 constexpr uint64_t kDirty = 4;
 
-// The options of a set with both flags off.
-usf::n64::Options SetOptions()
-{
-    usf::n64::Options options;
-    options.timing = usf::n64::Timing::kLegacy;
-    options.timer_interrupt = false;
-    options.ai_delay = false;
-    options.rcp_delays = false;
-    options.fpu_traps = false;
-    options.exact_events = false;
-
-    return options;
-}
-
-std::vector<uint8_t> TestRom()
-{
-    std::vector<uint8_t> rom(0x100000, 0);
-    xsflib::StoreBe32(rom.data(), 0x80371240);
-
-    return rom;
-}
-
-void PutProgram(System& system, uint32_t address, std::initializer_list<uint32_t> program)
-{
-    for (uint32_t word : program)
-    {
-        xsflib::StoreBe32(system.Rdram().data() + address, word);
-        address += 4;
-    }
-}
-
-// Puts the program at kCode and runs it for `instructions` instructions.
-void RunProgram(System& system, std::initializer_list<uint32_t> program, uint64_t instructions)
-{
-    PutProgram(system, kCode, program);
-    system.GetCpu().SetPc(kCodeAddress);
-    system.Run(instructions * system.TicksPerInstruction());
-}
+// A cartridge of 1 MiB.
+constexpr size_t kRomSize = 0x100000;
 
 uint32_t CauseCode(const Cpu& cpu)
 {
@@ -111,12 +79,13 @@ uint64_t EntryLo(uint32_t physical, uint64_t flags)
     return (uint64_t{physical} >> 12 << 6) | flags;
 }
 
-// Writes a TLB entry of two 4 KiB pages with TLBWI.
-void WriteTlbEntry(System& system, int index, uint64_t entry_hi, uint64_t entry_lo0, uint64_t entry_lo1)
+// Writes a TLB entry with TLBWI. A page mask of 0 gives two pages of 4 KiB.
+void WriteTlbEntry(System& system, int index, uint64_t entry_hi, uint64_t entry_lo0, uint64_t entry_lo1,
+                   uint64_t page_mask = 0)
 {
     Cpu& cpu = system.GetCpu();
     cpu.SetCop0(usf::n64::kCop0Index, static_cast<uint64_t>(index));
-    cpu.SetCop0(usf::n64::kCop0PageMask, 0);
+    cpu.SetCop0(usf::n64::kCop0PageMask, page_mask);
     cpu.SetCop0(usf::n64::kCop0EntryHi, entry_hi);
     cpu.SetCop0(usf::n64::kCop0EntryLo0, entry_lo0);
     cpu.SetCop0(usf::n64::kCop0EntryLo1, entry_lo1);
@@ -128,7 +97,7 @@ void BreakRaisesNothing()
 {
     for (const bool exact : {true, false})
     {
-        usf::n64::Options options = SetOptions();
+        usf::n64::Options options = SetOptions(false);
         options.exact_events = exact;
         System system(options);
         RunProgram(system, {kBreak, kSetT2}, 2);
@@ -156,7 +125,7 @@ void BreakRaisesNothing()
 void BreakMovesCountForward()
 {
     constexpr uint64_t kEventTime = 0x1000;
-    System system(SetOptions());
+    System system(SetOptions(false));
     const uint64_t ticks = system.TicksPerInstruction();
     system.Schedule(System::Event::kVi, kEventTime);
 
@@ -180,7 +149,7 @@ void BreakMovesCountForward()
 void BreakMovesCountBack()
 {
     constexpr uint64_t kEventTime = 4;
-    System system(SetOptions());
+    System system(SetOptions(false));
     const uint64_t ticks = system.TicksPerInstruction();
     system.Schedule(System::Event::kVi, kEventTime);
 
@@ -200,9 +169,9 @@ void ViCurrent()
     constexpr uint64_t kTicksPerLine = 2 * 1500;
     constexpr uint64_t kSliceInstructions = 100;
 
-    System system(SetOptions());
+    System system(SetOptions(false));
     const uint64_t slice = kSliceInstructions * system.TicksPerInstruction();
-    RunProgram(system, {kNop, 0x1000FFFE /* beq zero, zero, -2 */, kNop}, 1);
+    RunProgram(system, {kNop, kBranchBackTwo, kNop}, 1);
 
     // The first field starts at time 0.
     uint32_t last = 0;
@@ -237,8 +206,8 @@ void ViCurrent()
 
 std::vector<uint8_t> StateWithOptions()
 {
-    System source(SetOptions());
-    source.LoadRom(TestRom());
+    System source(SetOptions(false));
+    source.LoadRom(usf::testing::TestRom(kRomSize));
 
     return source.SaveState();
 }
@@ -246,8 +215,8 @@ std::vector<uint8_t> StateWithOptions()
 // A state with IP2 in Cause, an enabled interrupt line and the AI's bit in MI_INTR, with that bit allowed by the mask.
 std::vector<uint8_t> StaleInterruptState()
 {
-    System source(SetOptions());
-    source.LoadRom(TestRom());
+    System source(SetOptions(false));
+    source.LoadRom(usf::testing::TestRom(kRomSize));
     source.WritePhysical32(kMiMask, 0x20); // Sets the AI's mask bit.
     source.RaiseMi(usf::n64::kMiInterruptAi);
     Cpu& cpu = source.GetCpu();
@@ -262,8 +231,8 @@ std::vector<uint8_t> StaleInterruptState()
 void StaleInterruptLines()
 {
     const std::vector<uint8_t> state = StaleInterruptState();
-    System system(SetOptions());
-    system.LoadRom(TestRom());
+    System system(SetOptions(false));
+    system.LoadRom(usf::testing::TestRom(kRomSize));
     system.LoadState(state);
     const Cpu& cpu = system.GetCpu();
 
@@ -283,8 +252,8 @@ void StaleInterruptLines()
 // interrupt lines before it clears the latch. The bit therefore stays until the next re-check.
 void AiLatch()
 {
-    System system(SetOptions());
-    system.LoadRom(TestRom());
+    System system(SetOptions(false));
+    system.LoadRom(usf::testing::TestRom(kRomSize));
     const auto ai_bit = [&system]
     {
         return (system.ReadPhysical32(kMiIntr) & usf::n64::kMiInterruptAi) != 0;
@@ -308,7 +277,7 @@ void TlbStores()
     constexpr uint32_t kReadOnly = 0x10000;
     constexpr uint32_t kWritable = 0x11000;
     constexpr uint32_t kValue = 0x11223344;
-    System system(SetOptions());
+    System system(SetOptions(false));
     WriteTlbEntry(system, 0, 0x00400000, EntryLo(kReadOnly, kValid), EntryLo(kWritable, kValid | kDirty));
     WriteTlbEntry(system, 1, 0x00600000, EntryLo(0x12000, kDirty), 0);
     Cpu& cpu = system.GetCpu();
@@ -340,7 +309,7 @@ void TlbStores()
 void TlbFaultFields()
 {
     constexpr uint64_t kAddress = 0x00801234;
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     WriteTlbEntry(system, 0, 0x00400000, EntryLo(0x10000, kValid), 0);
 
@@ -381,7 +350,7 @@ void TlbFaultAtExceptionLevel()
 {
     constexpr uint64_t kAddress = 0x00800000;
     constexpr uint64_t kEpc = 0xFFFFFFFF80005000ull;
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     const auto set_level = [&cpu]
     {
@@ -413,7 +382,7 @@ void TlbFaultAtExceptionLevel()
 // vector. The scan ignores the ASID, the global bit and the V bit, and takes in unused entries.
 void TlbFaultVectors()
 {
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     const auto vector_of = [&system, &cpu](uint64_t address)
     {
@@ -427,8 +396,8 @@ void TlbFaultVectors()
 
     // A state's unused entry of zeros covers 0 to 0x1FFF, with the state's defined flag clear.
     std::vector<uint8_t> state = StateWithOptions();
-    std::fill_n(state.begin() + kOffsetTlb, kTlbEntries * kTlbEntrySize, uint8_t{0});
-    system.LoadRom(TestRom());
+    std::fill_n(state.begin() + usf::n64::kStateTlbOffset, kTlbEntries * kTlbEntrySize, uint8_t{0});
+    system.LoadRom(usf::testing::TestRom(kRomSize));
     system.LoadState(state);
     XSFLIB_CHECK(vector_of(0x00001FFC) == kGeneralVector);
     XSFLIB_CHECK(vector_of(0x00002000) == kRefillVector);
@@ -442,13 +411,7 @@ void TlbFaultVectors()
     XSFLIB_CHECK(vector_of(0x00402000) == kRefillVector);
 
     // The page mask widens what an entry covers: 16 KiB a half.
-    cpu.SetCop0(usf::n64::kCop0PageMask, 0x6000);
-    cpu.SetCop0(usf::n64::kCop0Index, 1);
-    cpu.SetCop0(usf::n64::kCop0EntryHi, 0x00800000);
-    cpu.SetCop0(usf::n64::kCop0EntryLo0, 0);
-    cpu.SetCop0(usf::n64::kCop0EntryLo1, 0);
-    cpu.SetGpr(8, 0);
-    RunProgram(system, {kTlbWriteIndexed}, 1);
+    WriteTlbEntry(system, 1, 0x00800000, 0, 0, 0x6000);
     XSFLIB_CHECK(vector_of(0x00807000) == kGeneralVector);
     XSFLIB_CHECK(vector_of(0x00808000) == kRefillVector);
 }
@@ -461,7 +424,7 @@ void TlbLostPage()
     constexpr uint32_t kFirst = 0x10000;
     constexpr uint32_t kSecond = 0x12000;
     constexpr uint32_t kValue = 0x55667788;
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     xsflib::StoreBe32(system.Rdram().data() + kSecond, 0xBBBBBBBB);
 
@@ -502,9 +465,9 @@ void TlbLostPage()
 void TlbFetch()
 {
     constexpr uint32_t kPage = 0x10000;
-    System system(SetOptions());
+    System system(SetOptions(false));
     WriteTlbEntry(system, 0, 0x70006000, EntryLo(kPage, kValid), 0);
-    PutProgram(system, kPage + 0x94, {kSetT2});
+    WriteProgram(system, kPage + 0x94, {kSetT2});
     Cpu& cpu = system.GetCpu();
 
     cpu.SetPc(0x70006094);
@@ -519,7 +482,7 @@ void TlbOverlaps()
 {
     constexpr uint32_t kFirst = 0x10000;
     constexpr uint32_t kSecond = 0x12000;
-    System system(SetOptions());
+    System system(SetOptions(false));
     xsflib::StoreBe32(system.Rdram().data() + kFirst, 0xAAAAAAAA);
     xsflib::StoreBe32(system.Rdram().data() + kSecond, 0xBBBBBBBB);
     Cpu& cpu = system.GetCpu();
@@ -551,7 +514,7 @@ void TlbSeparateMappings()
     constexpr uint32_t kWritable = 0x10000;
     constexpr uint32_t kReadOnly = 0x12000;
     constexpr uint32_t kValue = 0x55667788;
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     xsflib::StoreBe32(system.Rdram().data() + kReadOnly, 0xBBBBBBBB);
     WriteTlbEntry(system, 0, 0x00400000, EntryLo(kWritable, kValid | kDirty), 0);
@@ -579,7 +542,7 @@ void TlbSeparateMappings()
 void TlbRefusedHalf()
 {
     constexpr uint32_t kPage = 0x10000;
-    System system(SetOptions());
+    System system(SetOptions(false));
     Cpu& cpu = system.GetCpu();
     xsflib::StoreBe32(system.Rdram().data() + kPage, 0xAAAAAAAA);
     WriteTlbEntry(system, 0, 0x00400000, EntryLo(kPage, kValid), 0);
@@ -614,9 +577,9 @@ int main()
                                         TlbFaultAtExceptionLevel();
                                         TlbFaultVectors();
                                         TlbLostPage();
-                                        TlbSeparateMappings();
-                                        TlbRefusedHalf();
                                         TlbFetch();
                                         TlbOverlaps();
+                                        TlbSeparateMappings();
+                                        TlbRefusedHalf();
                                     });
 }

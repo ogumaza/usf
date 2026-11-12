@@ -2,12 +2,12 @@
 
 #include "rip/mips.h"
 
-#include <cstdint>
 #include <stdexcept>
+
+#include "n64/mips_registers.h"
 
 namespace usf::rip::mips
 {
-
 namespace
 {
 
@@ -22,7 +22,6 @@ constexpr uint32_t kOpOri = 0x0D;
 constexpr uint32_t kOpLui = 0x0F;
 constexpr uint32_t kOpLw = 0x23;
 constexpr uint32_t kOpLbu = 0x24;
-constexpr uint32_t kOpSh = 0x29;
 constexpr uint32_t kOpSw = 0x2B;
 
 constexpr uint32_t kFunctSll = 0x00;
@@ -80,11 +79,6 @@ uint32_t Lw(Register rt, Register base, uint16_t offset)
 uint32_t Sw(Register rt, Register base, uint16_t offset)
 {
     return IType(kOpSw, base, rt, offset);
-}
-
-uint32_t Sh(Register rt, Register base, uint16_t offset)
-{
-    return IType(kOpSh, base, rt, offset);
 }
 
 uint32_t Sll(Register rd, Register rt, uint32_t shift)
@@ -180,12 +174,13 @@ void Assembler::Bne(Register rs, Register rt, uint32_t target)
 void Assembler::J(uint32_t target)
 {
     // A jump keeps the top four bits of the delay slot's address.
-    if (((Here() + 4) & 0xF0000000) != (target & 0xF0000000) || (target & 3) != 0)
+    constexpr uint32_t kRegionMask = static_cast<uint32_t>(n64::mips::kJumpRegionMask);
+    if (((Here() + 4) & kRegionMask) != (target & kRegionMask) || (target & 3) != 0)
     {
         throw std::invalid_argument("a jump's target is out of its reach");
     }
 
-    Emit(kOpJ << 26 | ((target >> 2) & 0x03FFFFFF));
+    Emit(kOpJ << 26 | ((target >> 2) & n64::mips::kJumpIndexMask));
 }
 
 size_t Assembler::Size() const

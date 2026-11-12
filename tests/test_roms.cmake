@@ -6,6 +6,14 @@
 # - PeterLemon's N64 tests (Unlicense): their repository's CPUTest and RSPTest folders under PeterLemon/, with the
 #   ROMs and the fonts beside each test's source.
 
+# The name of the test of PeterLemon's ROM at `rom`, a path below PeterLemon/: the path without its extension, with
+# _ in place of /, after usf_peterlemon_.
+function(usf_peterlemon_test_name out rom)
+    string(REGEX REPLACE "\\.[nN]64$" "" name "${rom}")
+    string(REPLACE "/" "_" name "${name}")
+    set(${out} usf_peterlemon_${name} PARENT_SCOPE)
+endfunction()
+
 if (EXISTS "${USF_TEST_ROMS}/n64-systemtest.z64")
     add_test(NAME usf_systemtest COMMAND usf_test_rom systemtest "${USF_TEST_ROMS}/n64-systemtest.z64")
 endif()
@@ -48,10 +56,8 @@ foreach (entry IN LISTS usf_peterlemon_frames)
     if (NOT EXISTS "${USF_TEST_ROMS}/PeterLemon/${rom}")
         continue()
     endif()
-    string(REGEX REPLACE "\\.[nN]64$" "" name "${rom}")
-    string(REPLACE "/" "_" name "${name}")
-    add_test(NAME usf_peterlemon_${name} COMMAND usf_test_rom peterlemon-frame "${USF_TEST_ROMS}/PeterLemon/${rom}"
-             ${sha1} 240)
+    usf_peterlemon_test_name(name "${rom}")
+    add_test(NAME ${name} COMMAND usf_test_rom peterlemon-frame "${USF_TEST_ROMS}/PeterLemon/${rom}" ${sha1} 240)
 endforeach()
 
 file(GLOB_RECURSE usf_peterlemon_roms LIST_DIRECTORIES false
@@ -66,8 +72,7 @@ foreach (rom IN LISTS usf_peterlemon_roms)
     if (relative_folder IN_LIST usf_peterlemon_skipped)
         continue()
     endif()
-    file(RELATIVE_PATH name "${USF_TEST_ROMS}/PeterLemon" "${rom}")
-    string(REGEX REPLACE "\\.[nN]64$" "" name "${name}")
-    string(REPLACE "/" "_" name "${name}")
-    add_test(NAME usf_peterlemon_${name} COMMAND usf_test_rom peterlemon "${rom}")
+    file(RELATIVE_PATH relative_rom "${USF_TEST_ROMS}/PeterLemon" "${rom}")
+    usf_peterlemon_test_name(name "${relative_rom}")
+    add_test(NAME ${name} COMMAND usf_test_rom peterlemon "${rom}")
 endforeach()

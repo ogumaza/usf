@@ -8,9 +8,9 @@
 // the set holds 8 MB of RDRAM.
 //
 // - The sequence table at 0x801E1630 holds 128 sequences. Sequence 0 holds the sound effects. Sequences 0x23, 0x28,
-//   0x56, 0x60 and 0x61 point to sequences 0x16, 0x18, 0x3C, 0x57 and 0x51, so the set leaves them out.
-//   Sequence 0x01 holds ambience and stays silent until the game's code sets its ports. Sequence 0x7A makes no sound.
-//   The set leaves both out.
+//   0x56, 0x60 and 0x61 point to sequences 0x16, 0x18, 0x3C, 0x57 and 0x51, so the set leaves them out. Sequence 0x01
+//   holds ambience and stays silent until the game's code sets its ports. Sequence 0x7A makes no sound. The set leaves
+//   both out.
 // - The function at 0x801A89A8 takes a 32-bit command in a0 and queues it for the audio update. Command 0x000000NN
 //   starts sequence NN on sequence player 0. Command 0xE0000000 sets stereo output. When a scene's music starts, the
 //   function at 0x801A25E4 follows that command with 0x7004000V, which writes the day minus 1 to the player's port 4.
@@ -18,8 +18,8 @@
 //   player 0 is at 0x8020522C. The profile sends the same commands.
 // - Sequences 0x15 to 0x17 hold Clock Town's three days. The game starts sequence 0x1D, which plays one of them for the
 //   day in the port. The set reaches them through sequence 0x1D and leaves them out alone.
-// - Runs of the game in usf's core, with sequence 0x4D or 0x54 patched in at 0x801A25F4 and 0x801A2640, write 0 to
-//   port 4. The first-day tracks of those sequences write 0 there too. With -1 in the port, sequence 0x54 falls silent
+// - Runs of the game in usf's core, with sequence 0x4D or 0x54 patched in at 0x801A25F4 and 0x801A2640, write 0 to port
+//   4. The first-day tracks of those sequences write 0 there too. With -1 in the port, sequence 0x54 falls silent
 //   partway through.
 // - The game thread (entry 0x801748A0) calls the frame function at 0x80174868 once a frame. That function's work ends
 //   with a call of the audio update at 0x8019E014, which reads the queue. Gameplay has a frame of three video fields.
@@ -42,7 +42,6 @@
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -101,12 +100,12 @@ constexpr DayVersion kDayVersions[] = {
 // FirstDayPatches. Sequences 0x1D, 0x67 and 0x68 also read the port. For them, 0 and -1 play the same.
 constexpr uint32_t kFirstDaySequences[] = {0x4D, 0x54};
 
-// Tracks whose minis turn the driver's two day calls into other commands. Each call then fires for every track
-// whose number holds no day. 0 leaves a call as it is.
+// Tracks whose minis turn the driver's two day calls into other commands. Each call then fires for every track whose
+// number holds no day. 0 leaves a call as it is.
 //
-// - The function at 0x800FB758 calls 0x801A2544 in place of 0x801A25E4 when the time is from 0x4000 to 0xB71C and
-//   the byte at 0x801BDBC8 isn't 0. That function sends 0x70000001 as well as the day. Sequences 0x02 and 0x1D read
-//   port 0 and play a dawn piece for 1. A probe of all the sequences found no other that reads port 0.
+// - The function at 0x800FB758 calls 0x801A2544 in place of 0x801A25E4 when the time is from 0x4000 to 0xB71C and the
+//   byte at 0x801BDBC8 isn't 0. That function sends 0x70000001 as well as the day. Sequences 0x02 and 0x1D read port 0
+//   and play a dawn piece for 1. A probe of all the sequences found no other that reads port 0.
 // - The function at 0x801A36F0 sets the volumes of Romani Ranch's channels by Link's distance from Romani: channels 0
 //   and 1 hold her voice, and channel 13 a melody. Within 200 units the melody is at 0. Beyond 2000 units her voice is
 //   at 0. In between is a mix. On each day, the state beyond 2000 units plays as the track without the commands does.
@@ -269,19 +268,6 @@ constexpr Title kTitles[] = {
     {0x7F, "Sequence 0x7F: staff roll, part 2"},
 };
 
-// The patch that replaces the one word of the driver's code that holds `word`.
-RdramPatch DriverWordPatch(const Driver& driver, uint32_t word, uint32_t replacement)
-{
-    const auto found = std::ranges::find(driver.code, word);
-    if (found == driver.code.end() || std::find(found + 1, driver.code.end(), word) != driver.code.end())
-    {
-        throw std::logic_error("Majora's Mask's driver doesn't hold a word for a day call exactly once");
-    }
-
-    return {.address = driver.address + static_cast<uint32_t>(4 * (found - driver.code.begin())),
-            .words = {replacement}};
-}
-
 // The driver's calls send days 1 and 2. These patches change the call for day 2 into a call for day 0, in the minis of
 // the first-day tracks that require the command. A further call in the driver would change the library and every mini.
 std::vector<RdramPatch> FirstDayPatches(const Driver& driver)
@@ -304,12 +290,84 @@ std::vector<RdramPatch> DayCallPatches(const Driver& driver, uint32_t day, uint3
 
     // A LUI before the ORI loads the command's upper half.
     const uint32_t upper = lower.address - 4;
-    if (driver.code[(upper - driver.address) / 4] != mips::Lui(mips::kA0, kSetDayPort >> 16))
+    if (lower.address <= driver.address ||
+        driver.code[(upper - driver.address) / 4] != mips::Lui(mips::kA0, kSetDayPort >> 16))
     {
         throw std::logic_error("Majora's Mask's driver doesn't load the day command with a LUI and an ORI");
     }
 
     return {match, {.address = upper, .words = {mips::Lui(mips::kA0, command >> 16), lower.words[0]}}};
+}
+
+// Adds a track for each title. The first-day tracks of kFirstDaySequences get FirstDayPatches.
+void AddTitleTracks(const Driver& driver, std::vector<Track>& tracks)
+{
+    for (const Title& title : kTitles)
+    {
+        Track track;
+        track.number = title.number;
+        track.name = title.name;
+        if (std::ranges::find(kFirstDaySequences, title.number) != std::end(kFirstDaySequences))
+        {
+            track.rdram_patches = FirstDayPatches(driver);
+        }
+        tracks.push_back(track);
+    }
+}
+
+// Adds a track for each of kDayVersions.
+void AddDayVersionTracks(std::vector<Track>& tracks)
+{
+    for (const DayVersion& version : kDayVersions)
+    {
+        Track track;
+        track.number = version.Number();
+        track.name = version.name;
+        tracks.push_back(track);
+    }
+}
+
+// Adds a track for each of kCommandVersions, with the patches that turn the day calls into the commands of the version.
+void AddCommandVersionTracks(const Driver& driver, std::vector<Track>& tracks)
+{
+    for (const CommandVersion& version : kCommandVersions)
+    {
+        Track track;
+        track.number = version.sequence;
+        track.name = version.name;
+        for (uint32_t day = 1; day <= 2; day++)
+        {
+            const uint32_t command = version.commands[day - 1];
+            if (command != 0)
+            {
+                const std::vector<RdramPatch> patches = DayCallPatches(driver, day, command);
+                track.rdram_patches.insert(track.rdram_patches.end(), patches.begin(), patches.end());
+            }
+        }
+        tracks.push_back(track);
+    }
+}
+
+// Adds a track for each form of each of kSongFanfares.
+void AddFanfareTracks(const Driver& driver, std::vector<Track>& tracks)
+{
+    for (const uint32_t sequence : kSongFanfares)
+    {
+        const auto title = std::ranges::find(kTitles, sequence, &Title::number);
+        if (title == std::end(kTitles))
+        {
+            throw std::logic_error("a song's fanfare in Majora's Mask has no title");
+        }
+
+        for (const Form& form : kForms)
+        {
+            Track track;
+            track.number = sequence;
+            track.name = std::string(title->name) + form.name;
+            track.rdram_patches = DayCallPatches(driver, 1, kSetPort7 | form.value);
+            tracks.push_back(track);
+        }
+    }
 }
 
 } // namespace
@@ -355,63 +413,15 @@ GameProfile NusNzseUsa()
     driver.fields = 3;
     profile.driver = BuildCallDriver(driver);
 
-    profile.loop_watches.push_back(
-        {.address = kSequenceJump, .target_register = 25, .match_register = 5, .match_value = kSequenceScriptState});
+    profile.loop_watches.push_back({.address = kSequenceJump,
+                                    .target_register = mips::kT9,
+                                    .match_register = mips::kA1,
+                                    .match_value = kSequenceScriptState});
 
-    for (const Title& title : kTitles)
-    {
-        Track track;
-        track.number = title.number;
-        track.name = title.name;
-        if (std::ranges::find(kFirstDaySequences, title.number) != std::end(kFirstDaySequences))
-        {
-            track.rdram_patches = FirstDayPatches(*profile.driver);
-        }
-        profile.tracks.push_back(track);
-    }
-
-    for (const DayVersion& version : kDayVersions)
-    {
-        Track track;
-        track.number = version.Number();
-        track.name = version.name;
-        profile.tracks.push_back(track);
-    }
-
-    for (const CommandVersion& version : kCommandVersions)
-    {
-        Track track;
-        track.number = version.sequence;
-        track.name = version.name;
-        for (uint32_t day = 1; day <= 2; day++)
-        {
-            const uint32_t command = version.commands[day - 1];
-            if (command != 0)
-            {
-                const std::vector<RdramPatch> patches = DayCallPatches(*profile.driver, day, command);
-                track.rdram_patches.insert(track.rdram_patches.end(), patches.begin(), patches.end());
-            }
-        }
-        profile.tracks.push_back(track);
-    }
-
-    for (const uint32_t sequence : kSongFanfares)
-    {
-        const auto title = std::ranges::find(kTitles, sequence, &Title::number);
-        if (title == std::end(kTitles))
-        {
-            throw std::logic_error("a song's fanfare in Majora's Mask has no title");
-        }
-
-        for (const Form& form : kForms)
-        {
-            Track track;
-            track.number = sequence;
-            track.name = std::string(title->name) + form.name;
-            track.rdram_patches = DayCallPatches(*profile.driver, 1, kSetPort7 | form.value);
-            profile.tracks.push_back(track);
-        }
-    }
+    AddTitleTracks(*profile.driver, profile.tracks);
+    AddDayVersionTracks(profile.tracks);
+    AddCommandVersionTracks(*profile.driver, profile.tracks);
+    AddFanfareTracks(*profile.driver, profile.tracks);
 
     return profile;
 }

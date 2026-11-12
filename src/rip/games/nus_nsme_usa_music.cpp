@@ -7,12 +7,12 @@
 //
 // - The play-music function at 0x803219AC takes a sequence player in a0, the sequence in the low byte of a1 and a
 //   priority in its high byte, and a fade-in in a2. For player 0, the level's music, it keeps a queue by priority and
-//   starts the sequence at the volume that the table at 0x80333188 gives it (through 0x80320F68). For another player
-//   it starts the sequence through 0x80320544 at the sequence's own volume. Bit 7 of the sequence is its variation,
-//   which the sequence's script reads.
-// - The sound reset at 0x80322230 takes an audio set-up in a0, 0 to 7, from the table at 0x803332A0. The set-ups
-//   differ in their reverb and their number of voices. The levels' scripts start their music through 0x80249178, which
-//   resets the sound with the area's set-up and calls the play-music function for player 0. Set-up 7 is the credits'.
+//   starts the sequence at the volume that the table at 0x80333188 gives it (through 0x80320F68). For another player it
+//   starts the sequence through 0x80320544 at the sequence's own volume. Bit 7 of the sequence is its variation, which
+//   the sequence's script reads.
+// - The sound reset at 0x80322230 takes an audio set-up in a0, 0 to 7, from the table at 0x803332A0. The set-ups differ
+//   in their reverb and their number of voices. The levels' scripts start their music through 0x80249178, which resets
+//   the sound with the area's set-up and calls the play-music function for player 0. Set-up 7 is the credits'.
 // - The game's code starts the jingles on player 1, through the functions at 0x80322078 to 0x803221F4 and through the
 //   play-music function at 0x80258250. It starts the piranha plants' lullaby, the endless stairs and the merry-go-round
 //   on player 1 too, through 0x80321E48, which can also set player 1's volume through 0x8031E710. Near the
@@ -24,22 +24,22 @@
 //   after a sequence starts takes effect at once. Only Dire, Dire Docks, Jolly Roger Bay, Big Boo's Haunt, Hazy Maze
 //   Cave and Wet-Dry World have rules. A track that needs them gets its level and Mario's place in its mini.
 // - The sound reset at 0x80322230 returns to 0x802491D8 in the game thread. The first return comes before any music.
-// - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x8031DDD0 to
-//   0x8031DE2C. At 0x8031DE28 the new script address is in t7 and the sequence player in s1. Players 0 and 1 are at
-//   0x80222618 and 0x80222758.
+// - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x8031DDD0 to 0x8031DE2C.
+//   At 0x8031DE28 the new script address is in t7 and the sequence player in s1. Players 0 and 1 are at 0x80222618 and
+//   0x80222758.
 //
-// A track's number holds what the driver passes to the game's functions: the sequence in bits 0 to 7, the audio
-// set-up in bits 8 to 10, a sound reset in bit 11, player 1 in bit 12, a volume for player 1 in bit 13 with the volume
-// in bits 16 to 23, and a number that tells apart the tracks of one sequence in bits 24 to 27.
+// A track's number holds what the driver passes to the game's functions: the sequence in bits 0 to 7, the audio set-up
+// in bits 8 to 10, a sound reset in bit 11, player 1 in bit 12, a volume for player 1 in bit 13 with the volume in bits
+// 16 to 23, and a number that tells apart the tracks of one sequence in bits 24 to 27.
 
-#include <cstdio>
+#include <vector>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -52,8 +52,8 @@ constexpr uint32_t kSequenceJump = 0x8031DE28;
 constexpr uint32_t kPlayer0 = 0x80222618;
 constexpr uint32_t kPlayer1 = 0x80222758;
 
-// The words that the levels' rules read. The level and the room are the upper halves of their words, and the area
-// the lower half of its word. At the snapshot the other halves hold 0.
+// The words that the levels' rules read. The level and the room are the upper halves of their words, and the area the
+// lower half of its word. At the snapshot the other halves hold 0.
 constexpr uint32_t kLevelWord = 0x8032DDF8;
 constexpr uint32_t kAreaWord = 0x8033BAC8;
 constexpr uint32_t kRoomWord = 0x80361250;
@@ -63,12 +63,18 @@ constexpr uint32_t kMarioY = 0x8033B1B0;
 // nothing after the snapshot.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
+constexpr uint16_t kSequenceMask = 0xFF;
 constexpr uint32_t kVariation = 0x80;
+constexpr int kSetupShift = 8;
+constexpr uint16_t kSetupMask = 0x7;
 constexpr uint32_t kReset = 1u << 11;
 constexpr uint32_t kPlayer1Flag = 1u << 12;
 constexpr uint32_t kVolumeFlag = 1u << 13;
+constexpr int kVolumeShift = 16;
+constexpr uint16_t kVolumeMask = 0xFF;
+constexpr int kVariantShift = 24;
 
-// The levels with rules, and the float 100.0 for Mario's height.
+// The levels with rules, and the floats 100.0 and -300.0 for Mario's height.
 constexpr uint32_t kLevelBigBoosHaunt = 4;
 constexpr uint32_t kLevelHazyMazeCave = 7;
 constexpr uint32_t kLevelWetDryWorld = 11;
@@ -172,7 +178,7 @@ const Piece kPieces[] = {
 
 uint32_t TrackNumber(const Piece& piece)
 {
-    uint32_t number = piece.sequence | (piece.setup << 8) | (piece.variant << 24);
+    uint32_t number = piece.sequence | (piece.setup << kSetupShift) | (piece.variant << kVariantShift);
     if (piece.setup != 0)
     {
         number |= kReset;
@@ -183,7 +189,7 @@ uint32_t TrackNumber(const Piece& piece)
     }
     if (piece.volume != 0)
     {
-        number |= kVolumeFlag | (piece.volume << 16);
+        number |= kVolumeFlag | (piece.volume << kVolumeShift);
     }
 
     return number;
@@ -223,35 +229,36 @@ GameProfile NusNsmeUsaMusic()
     profile.set = "music";
     profile.year = "1996";
     profile.cic = n64::Cic::k6102;
-    profile.sound_driver = "Super Mario 64 sound engine";
+    profile.sound_driver = kSuperMario64SoundEngine;
 
-    // The driver takes over the game thread at the first return from the sound reset, as in the sound effects'
-    // profile. It resets the sound with the track's set-up, unless the track uses the snapshot's set-up 0. It then
-    // starts the sequence on its player, and sets player 1's volume where the game does. Each frame ends with the
-    // game-loop tick. A frame is two fields, as in the game.
+    // The driver takes over the game thread at the first return from the sound reset, as in the sound effects' profile.
+    // It resets the sound with the track's set-up, unless the track uses the snapshot's set-up 0. It then starts the
+    // sequence on its player, and sets player 1's volume where the game does. Each frame ends with the game-loop tick.
+    // A frame is two fields, as in the game.
     profile.snapshot_address = kAfterSoundReset;
     profile.snapshot_hit = 1;
     profile.quiet_tries = 30;
     profile.boot_seconds = 5.0;
 
-    const CallArgument sequence = {.track = true, .mask = 0xFF};
+    constexpr CallArgument kSequenceArgument = {.track = true, .mask = kSequenceMask};
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {
         {.function = kSoundReset,
-         .arguments = {{.track = true, .right_shift = 8, .mask = 0x7}},
+         .arguments = {{.track = true, .right_shift = kSetupShift, .mask = kSetupMask}},
          .track_mask = kReset,
          .track_value = kReset},
         {.function = kPlayMusic,
-         .arguments = {{.value = 0}, sequence, {.value = 0}},
+         .arguments = {{.value = 0}, kSequenceArgument, {.value = 0}},
          .track_mask = kPlayer1Flag,
          .track_value = 0},
         {.function = kPlayMusic,
-         .arguments = {{.value = 1}, sequence, {.value = 0}},
+         .arguments = {{.value = 1}, kSequenceArgument, {.value = 0}},
          .track_mask = kPlayer1Flag,
          .track_value = kPlayer1Flag},
+        // a1 is the number of the player's updates that the change takes. The game's call at 0x80321E30 passes 1 too.
         {.function = kSetPlayerVolume,
-         .arguments = {{.value = 1}, {.value = 1}, {.track = true, .right_shift = 16, .mask = 0xFF}},
+         .arguments = {{.value = 1}, {.value = 1}, {.track = true, .right_shift = kVolumeShift, .mask = kVolumeMask}},
          .track_mask = kVolumeFlag,
          .track_value = kVolumeFlag},
     };
@@ -261,14 +268,14 @@ GameProfile NusNsmeUsaMusic()
 
     // Players 0 and 1 run the music. Player 2 runs the sound effects' script, whose jumps don't mark the music's loops.
     profile.loop_watches.push_back({.address = kSequenceJump,
-                                    .target_register = 15,
-                                    .track_register = 17,
-                                    .match_register = 17,
+                                    .target_register = mips::kT7,
+                                    .track_register = mips::kS1,
+                                    .match_register = mips::kS1,
                                     .match_value = kPlayer0});
     profile.loop_watches.push_back({.address = kSequenceJump,
-                                    .target_register = 15,
-                                    .track_register = 17,
-                                    .match_register = 17,
+                                    .target_register = mips::kT7,
+                                    .track_register = mips::kS1,
+                                    .match_register = mips::kS1,
                                     .match_value = kPlayer1});
 
     for (const Piece& piece : kPieces)

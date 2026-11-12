@@ -16,15 +16,14 @@
 // - The sequence reader at 0x80031A80 reads one track of a sequence. At 0x80031BDC it has reached the end of a loop,
 //   with the loop's count in v1, the end's address in a2 and the track in s2. A count of 0xFF repeats for ever.
 
-#include <cstdio>
-
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
+#include "rip/mips.h"
 
 namespace usf::rip::games
 {
-
 namespace
 {
 
@@ -34,10 +33,7 @@ constexpr uint32_t kPlaySequence = 0x8002877C;
 constexpr uint32_t kLoopEnd = 0x80031BDC;
 constexpr uint32_t kBoardThread = 0x8006F930;
 
-// RDRAM near the end that stays zero through the attract mode.
-constexpr uint32_t kDriverAddress = 0x807FF000;
-
-constexpr int kSequences = 12;
+constexpr uint32_t kSequences = 12;
 
 } // namespace
 
@@ -51,30 +47,25 @@ GameProfile Aleck64Mayjinsen3()
     profile.serial = "Aleck64 Mayjinsen 3";
     profile.sha1 = "da401fc96a2b69db81970d879a2255e54db88e34";
     profile.year = "2000";
-    profile.sound_driver = "libultra compressed sequence player";
+    profile.sound_driver = kCompressedSequencePlayer;
 
     profile.snapshot_address = kIdleLoop;
     profile.snapshot_hit = kIdleAfterBoot;
-    profile.quiet_tries = 1000000;
+    profile.quiet_tries = kUntilQuiet;
     profile.boot_seconds = 10.0;
     profile.stop_threads = {kBoardThread};
 
     CallDriverOptions driver;
-    driver.address = kDriverAddress;
+    driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kPlaySequence, .arguments = {{.track = true}}}};
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(
-        {.address = kLoopEnd, .target_register = 6, .track_register = 18, .count_register = 3});
+        {.address = kLoopEnd, .target_register = mips::kA2, .track_register = mips::kS2, .count_register = mips::kV1});
 
-    for (int number = 0; number < kSequences; number++)
+    for (uint32_t number = 0; number < kSequences; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(number);
-        char name[16];
-        std::snprintf(name, sizeof(name), "Sequence %d", number);
-        track.name = name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Sequence", number, TitleBase::kDecimal)));
     }
 
     return profile;

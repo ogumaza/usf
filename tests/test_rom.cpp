@@ -16,17 +16,21 @@
 //       One of PeterLemon's tests that draws values but no verdict. The test passes when the SHA-1 of the frame's
 //       first LINES lines, as RGB bytes, is SHA1. The hashes come from the screenshots in the tests' repository.
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include "xsflib/bytes.h"
 #include "xsflib/files.h"
 #include "xsflib/sha1.h"
 
@@ -36,6 +40,13 @@ namespace
 {
 
 using usf::n64::System;
+
+constexpr const char* kUsage =
+    "usage: usf_test_rom systemtest|peterlemon ROM [SECONDS]\n"
+    "       usf_test_rom peterlemon-frame ROM SHA1 LINES\n";
+
+// The width of a frame when the VI reports none.
+constexpr uint32_t kDefaultFrameWidth = 640;
 
 bool LoadRom(System& system, const std::string& path)
 {
@@ -73,6 +84,67 @@ void TraceExceptions(System& system)
         });
 }
 
+// Runs `system` in steps until the summary appears in `text`, for up to `seconds`. Returns false after printing that it
+// didn't.
+bool RunUntilSummary(System& system, const std::string& text, double seconds)
+{
+    constexpr double kStep = 0.5;
+    for (double t = 0; t < seconds; t += kStep)
+    {
+        system.RunSeconds(kStep);
+        if (text.find("Finished in") != std::string::npos)
+        {
+            break;
+        }
+    }
+
+    if (text.find("Finished in") == std::string::npos)
+    {
+        std::printf("\nno summary after %.1f s (PC 0x%08llX)\n", seconds,
+                    static_cast<unsigned long long>(system.GetCpu().Pc() & 0xFFFFFFFF));
+        return false;
+    }
+
+    return true;
+}
+
+// The names of the tests that failed in `text`, outside the categories that the core doesn't cover.
+std::set<std::string> FailuresInScope(const std::string& text)
+{
+    // Each failure starts "Test '<name>' failed". The RDP's tests can't pass, because the RDP doesn't draw, and the
+    // cache tests can't either, because the core has no caches. The core doesn't reverse the byte order in user mode
+    // when Status.RE is set. Games run in kernel mode, so none depends on it.
+    static constexpr std::array<std::string_view, 5> kOutOfScope = {"RDP", "CACHE", "ICACHE", "DCACHE", "RE "};
+    std::set<std::string> failed;
+    size_t start = 0;
+    while ((start = text.find("Test '", start)) != std::string::npos)
+    {
+        start += 6;
+        const size_t end = text.find("' ", start);
+        if (end == std::string::npos)
+        {
+            break;
+        }
+
+        const std::string name = text.substr(start, end - start);
+        if (text.compare(end, 9, "' failed:") != 0 && text.compare(end, 7, "' with ") != 0)
+        {
+            continue;
+        }
+
+        const auto out_of_scope = [&name](std::string_view prefix)
+        {
+            return name.starts_with(prefix);
+        };
+        if (!std::any_of(kOutOfScope.begin(), kOutOfScope.end(), out_of_scope))
+        {
+            failed.insert(name);
+        }
+    }
+
+    return failed;
+}
+
 int RunSystemTest(const std::string& path, double seconds)
 {
     usf::n64::Options options;
@@ -102,60 +174,12 @@ int RunSystemTest(const std::string& path, double seconds)
     }
 
     TraceExceptions(system);
-
-    // Run until the summary appears.
-    const double step = 0.5;
-    for (double t = 0; t < seconds; t += step)
+    if (!RunUntilSummary(system, text, seconds))
     {
-        system.RunSeconds(step);
-        if (text.find("Finished in") != std::string::npos)
-        {
-            break;
-        }
-    }
-
-    if (text.find("Finished in") == std::string::npos)
-    {
-        std::printf("\nno summary after %.1f s (PC 0x%08llX)\n", seconds,
-                    static_cast<unsigned long long>(system.GetCpu().Pc() & 0xFFFFFFFF));
         return 1;
     }
 
-    // Each failure starts "Test '<name>' failed". The RDP's tests can't pass, because the RDP doesn't draw, and the
-    // cache tests can't either, because the core has no caches. The core doesn't reverse the byte order in user mode
-    // when Status.RE is set. Games run in kernel mode, so none depends on it.
-    static constexpr std::array<std::string_view, 5> kOutOfScope = {"RDP", "CACHE", "ICACHE", "DCACHE", "RE "};
-    std::set<std::string> failed;
-    size_t start = 0;
-    while ((start = text.find("Test '", start)) != std::string::npos)
-    {
-        start += 6;
-        const size_t end = text.find("' ", start);
-        if (end == std::string::npos)
-        {
-            break;
-        }
-
-        const std::string name = text.substr(start, end - start);
-        if (text.compare(end, 9, "' failed:") != 0 && text.compare(end, 7, "' with ") != 0)
-        {
-            continue;
-        }
-
-        bool covered = true;
-        for (std::string_view prefix : kOutOfScope)
-        {
-            if (std::string_view(name).substr(0, prefix.size()) == prefix)
-            {
-                covered = false;
-            }
-        }
-        if (covered)
-        {
-            failed.insert(name);
-        }
-    }
-
+    const std::set<std::string> failed = FailuresInScope(text);
     for (const std::string& name : failed)
     {
         std::printf("failed: %s\n", name.c_str());
@@ -165,54 +189,78 @@ int RunSystemTest(const std::string& path, double seconds)
     return failed.empty() ? 0 : 1;
 }
 
-// Counts where `text`, drawn in `font`, appears in the 32-bit frame of `width` pixels at `origin`. With the
-// environment variable USF_TRACE set, prints where each one is.
-int CountText(const System& system, uint32_t origin, uint32_t width, const std::vector<uint8_t>& font, const char* text)
+// The lines of a frame of `width` pixels: a 4:3 picture.
+uint32_t FrameHeight(uint32_t width)
 {
+    return width * 3 / 4;
+}
+
+// Whether `font` holds the glyph of each character of `text`: 8 rows of 8 pixels of 4 bytes, 256 bytes for each
+// character code.
+bool CoversText(const std::vector<uint8_t>& font, std::string_view text)
+{
+    const auto covered = [&font](char c)
+    {
+        return static_cast<uint8_t>(c) * 256u + 256 <= font.size();
+    };
+
+    return std::all_of(text.begin(), text.end(), covered);
+}
+
+// Whether `text`, drawn in `font`, starts at byte `pixel` of `rdram`, in a frame whose lines are `stride` bytes apart.
+bool TextAt(std::span<const uint8_t> rdram, const std::vector<uint8_t>& font, std::string_view text, size_t pixel,
+            uint32_t stride)
+{
+    for (size_t c = 0; c < text.size(); c++)
+    {
+        const size_t glyph = static_cast<uint8_t>(text[c]) * 256u;
+        for (uint32_t row = 0; row < 8; row++)
+        {
+            const size_t start = pixel + size_t{row} * stride + c * 32;
+            if (start + 32 > rdram.size())
+            {
+                return false;
+            }
+
+            const std::span<const uint8_t> line = rdram.subspan(start, 32);
+            if (!std::equal(line.begin(), line.end(), font.begin() + static_cast<std::ptrdiff_t>(glyph + row * 32)))
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Counts where `text`, drawn in `font`, appears in the 32-bit frame of `width` pixels at `origin`. With the environment
+// variable USF_TRACE set, prints where each one is. Returns 0 when `font` doesn't cover `text`.
+int CountText(const System& system, uint32_t origin, uint32_t width, const std::vector<uint8_t>& font,
+              std::string_view text)
+{
+    if (!CoversText(font, text))
+    {
+        return 0;
+    }
+
+    const uint32_t height = FrameHeight(width);
     const bool trace = std::getenv("USF_TRACE") != nullptr;
     const auto rdram = system.Rdram();
-    const size_t length = std::char_traits<char>::length(text);
     const uint32_t stride = width * 4;
     int count = 0;
-    for (uint32_t y = 0; y + 8 <= 480; y++)
+    for (uint32_t y = 0; y + 8 <= height; y++)
     {
-        for (uint32_t x = 0; x + 8 * length <= width; x++)
+        for (uint32_t x = 0; x + 8 * text.size() <= width; x++)
         {
-            bool match = true;
-            for (size_t c = 0; c < length && match; c++)
+            if (!TextAt(rdram, font, text, size_t{origin} + size_t{y} * stride + size_t{x} * 4, stride))
             {
-                const size_t glyph = static_cast<uint8_t>(text[c]) * 256u;
-                if (glyph + 256 > font.size())
-                {
-                    return 0;
-                }
-
-                for (uint32_t row = 0; row < 8 && match; row++)
-                {
-                    const size_t pixel = size_t{origin} + size_t{y + row} * stride + (x + 8 * c) * 4;
-                    if (pixel + 32 > rdram.size())
-                    {
-                        match = false;
-                        break;
-                    }
-
-                    for (uint32_t i = 0; i < 32; i++)
-                    {
-                        if (rdram[pixel + i] != font[glyph + row * 32 + i])
-                        {
-                            match = false;
-                            break;
-                        }
-                    }
-                }
+                continue;
             }
-            if (match)
+
+            count++;
+            if (trace)
             {
-                count++;
-                if (trace)
-                {
-                    std::printf("%s at (%u, %u)\n", text, x, y);
-                }
+                std::printf("%.*s at (%u, %u)\n", static_cast<int>(text.size()), text.data(), x, y);
             }
         }
     }
@@ -220,22 +268,33 @@ int CountText(const System& system, uint32_t origin, uint32_t width, const std::
     return count;
 }
 
-// Writes the 32-bit frame of `width` pixels at `origin` to `path` as a PPM image, for comparison with the screenshots
-// that come with some of the tests.
-void WriteFrame(const System& system, uint32_t origin, uint32_t width, const char* path)
+// The RGB bytes of the first `lines` lines of the 32-bit frame of `width` pixels at `origin`. A pixel past the end of
+// RDRAM is black.
+std::vector<uint8_t> FrameRgb(const System& system, uint32_t origin, uint32_t width, uint32_t lines)
 {
     const auto rdram = system.Rdram();
-    const uint32_t height = width * 3 / 4;
-    std::string header = "P6\n" + std::to_string(width) + " " + std::to_string(height) + "\n255\n";
-    std::vector<uint8_t> image(header.begin(), header.end());
-    for (uint32_t i = 0; i < width * height; i++)
+    std::vector<uint8_t> rgb;
+    for (uint32_t i = 0; i < width * lines; i++)
     {
         const size_t pixel = size_t{origin} + size_t{i} * 4;
         for (size_t c = 0; c < 3; c++)
         {
-            image.push_back(pixel + c < rdram.size() ? rdram[pixel + c] : 0);
+            rgb.push_back(pixel + c < rdram.size() ? rdram[pixel + c] : uint8_t{0});
         }
     }
+
+    return rgb;
+}
+
+// Writes the 32-bit frame of `width` pixels at `origin` to `path` as a PPM image, for comparison with the screenshots
+// that come with some of the tests.
+void WriteFrame(const System& system, uint32_t origin, uint32_t width, const char* path)
+{
+    const uint32_t height = FrameHeight(width);
+    std::string header = "P6\n" + std::to_string(width) + " " + std::to_string(height) + "\n255\n";
+    std::vector<uint8_t> image(header.begin(), header.end());
+    const std::vector<uint8_t> rgb = FrameRgb(system, origin, width, height);
+    image.insert(image.end(), rgb.begin(), rgb.end());
 
     if (auto error = xsflib::WriteFile(xsflib::PathFromUtf8(path), image))
     {
@@ -259,8 +318,8 @@ bool RunPeterLemonRom(System& system, const std::string& path, double seconds)
     }
 
     // The tests' expected values were recorded on a console that started them from a flash cartridge. Its menu leaves
-    // COP0 Status at 0x241000E0, not the 0x34000000 that a cold boot leaves. The exception tests check that value,
-    // and the vector that its KX bit selects. n64-systemtest's startup test describes the same state.
+    // COP0 Status at 0x241000E0, not the 0x34000000 that a cold boot leaves. The exception tests check that value, and
+    // the vector that its KX bit selects. n64-systemtest's startup test describes the same state.
     system.GetCpu().SetCop0(usf::n64::kCop0Status, 0x241000E0);
 
     TraceExceptions(system);
@@ -287,19 +346,9 @@ int RunPeterLemonFrame(const std::string& path, const std::string& expected, uin
     }
 
     const System::Frame frame = system.VideoFrame();
-    const uint32_t width = frame.width == 0 ? 640 : frame.width;
-    const auto rdram = system.Rdram();
+    const uint32_t width = frame.width == 0 ? kDefaultFrameWidth : frame.width;
     xsflib::Sha1 sha1;
-    for (uint32_t i = 0; i < width * lines; i++)
-    {
-        const size_t pixel = size_t{frame.origin} + size_t{i} * 4;
-        const std::array<uint8_t, 3> rgb = {
-            pixel < rdram.size() ? rdram[pixel] : uint8_t{0},
-            pixel + 1 < rdram.size() ? rdram[pixel + 1] : uint8_t{0},
-            pixel + 2 < rdram.size() ? rdram[pixel + 2] : uint8_t{0},
-        };
-        sha1.Update(rgb);
-    }
+    sha1.Update(FrameRgb(system, frame.origin, width, lines));
 
     const std::string actual = xsflib::Sha1::Hex(sha1.Finish());
     std::printf("%s: frame %s, expected %s\n", path.c_str(), actual.c_str(), expected.c_str());
@@ -318,6 +367,12 @@ int RunPeterLemon(const std::string& path, double seconds)
         return 1;
     }
 
+    if (!CoversText(green, "PASS") || !CoversText(red, "FAIL"))
+    {
+        std::fprintf(stderr, "error: a font beside %s is too short for PASS or FAIL\n", path.c_str());
+        return 1;
+    }
+
     System system(PeterLemonOptions());
     if (!RunPeterLemonRom(system, path, seconds))
     {
@@ -325,7 +380,7 @@ int RunPeterLemon(const std::string& path, double seconds)
     }
 
     const System::Frame frame = system.VideoFrame();
-    const uint32_t width = frame.width == 0 ? 640 : frame.width;
+    const uint32_t width = frame.width == 0 ? kDefaultFrameWidth : frame.width;
     if (const char* dump = std::getenv("USF_FRAME"))
     {
         WriteFrame(system, frame.origin, width, dump);
@@ -345,9 +400,7 @@ int main(int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::fprintf(stderr,
-                     "usage: usf_test_rom systemtest|peterlemon ROM [SECONDS]\n"
-                     "       usf_test_rom peterlemon-frame ROM SHA1 LINES\n");
+        std::fprintf(stderr, "%s", kUsage);
         return 2;
     }
 
@@ -361,8 +414,14 @@ int main(int argc, char** argv)
     {
         return RunPeterLemon(path, argc > 3 ? std::atof(argv[3]) : 4);
     }
-    if (mode == "peterlemon-frame" && argc > 4)
+    if (mode == "peterlemon-frame")
     {
+        if (argc < 5)
+        {
+            std::fprintf(stderr, "%s", kUsage);
+            return 2;
+        }
+
         return RunPeterLemonFrame(path, argv[3], static_cast<uint32_t>(std::atoi(argv[4])));
     }
 

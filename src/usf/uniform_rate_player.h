@@ -6,8 +6,7 @@
 // then converted to the track's rate by linear interpolation. Every front end plays a file alike, and the track's times
 // stay right in seconds.
 //
-// xsflib's Playback uses this class as its player. Playback seeks by restarting and rendering, so Player::Seek isn't
-// used here.
+// xsflib's Playback uses this class as its player. Playback seeks by restarting and rendering.
 
 #pragma once
 
