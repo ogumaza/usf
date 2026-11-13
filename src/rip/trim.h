@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// Trimming by coverage: a set keeps the ROM words that a track's run read. The library keeps the whole state and the
-// ROM words that every track read. Each mini keeps its other ROM words and its selector.
+// Trimming by coverage: a set keeps the ROM words that a track's run read. The library keeps the state and every ROM
+// word that a track read. Each mini keeps only its selector and its patches.
 //
-// RDRAM isn't trimmed. The legacy players' timing differs from the core's. In a legacy player, a game's code can take
-// paths that the core's runs never take. Those paths can read RDRAM words that the core's runs never read. Such words
-// would read as zero in a trimmed set.
+// RDRAM isn't trimmed by coverage. The legacy players' timing differs from the core's. In a legacy player, a game's
+// code can take paths that the core's runs never take. Those paths can read RDRAM words that the core's runs never
+// read. Such words would read as zero in a set trimmed that way. The library leaves out only the words of RDRAM that
+// are zero in the state. A player fills the state image with zeros before it loads a set, so those words read the same.
 
 #pragma once
 
@@ -40,8 +41,8 @@ struct SetSections
     std::vector<Sections> minis;
 };
 
-// The sections of a set of `tracks`. The library holds the whole state. With `words`, one entry for each track, the ROM
-// is trimmed. Without it, the library holds the whole ROM.
+// The sections of a set of `tracks`. With `words`, one entry for each track, the ROM is trimmed, and the library's
+// state leaves out the words of RDRAM that are zero. Without it, the library holds the whole ROM and the whole state.
 SetSections BuildSet(const Snapshot& snapshot, const std::vector<Track>& tracks, const std::vector<TrackWords>* words);
 
 } // namespace usf::rip

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "xsflib/text.h"
+
 #include "n64/constants.h"
 #include "rip/mips.h"
 
@@ -26,6 +28,10 @@ static_assert((kViBase & 0xFFFF) == 0);
 
 // The driver's stack frame: the 16 bytes of argument space that a callee may use, rounded up to 8-byte alignment.
 constexpr uint16_t kFrameSize = 32;
+
+// The flags of libultra's osRecvMesg: OS_MESG_NOBLOCK and OS_MESG_BLOCK.
+constexpr uint32_t kMesgNoBlock = 0;
+constexpr uint32_t kMesgBlock = 1;
 
 void CheckAddress(uint32_t address, const char* what)
 {
@@ -222,7 +228,41 @@ Driver BuildCallDriver(const CallDriverOptions& options)
 
     driver.track_word = track_word;
 
+    const uint32_t end = options.address + static_cast<uint32_t>(4 * driver.code.size());
+    if (options.end != 0 && end > options.end)
+    {
+        throw std::invalid_argument("the driver at " + xsflib::Hex(options.address, 8, true) + " runs to " +
+                                    xsflib::Hex(end, 8, true) + ", past its end at " +
+                                    xsflib::Hex(options.end, 8, true));
+    }
+
     return driver;
+}
+
+GameCall MessageWait(uint32_t recv_mesg, uint32_t queue)
+{
+    return {.function = recv_mesg, .arguments = {{.value = queue}, {.value = 0}, {.value = kMesgBlock}}};
+}
+
+GameCall MessageDrop(uint32_t recv_mesg, uint32_t queue)
+{
+    return {.function = recv_mesg, .arguments = {{.value = queue}, {.value = 0}, {.value = kMesgNoBlock}}};
+}
+
+std::vector<GameCall> AddRetraceClient(const RetraceClient& client)
+{
+    // The queue's size in libultra's OSMesgQueue, and its one message.
+    constexpr uint32_t kQueueSize = 24;
+    constexpr uint32_t kMessages = 1;
+
+    CheckAddress(client.address, "a retrace client");
+    const uint32_t buffer = client.address + kQueueSize;
+    const uint32_t record = buffer + 4 * kMessages;
+
+    return {{.function = client.create_queue,
+             .arguments = {{.value = client.address}, {.value = buffer}, {.value = kMessages}}},
+            {.function = client.add_client,
+             .arguments = {{.value = client.manager}, {.value = record}, {.value = client.address}}}};
 }
 
 RdramPatch DriverWordPatch(const Driver& driver, uint32_t word, uint32_t replacement)

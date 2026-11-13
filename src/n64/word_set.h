@@ -43,10 +43,6 @@ public:
     // Adds the words of `other`, up to the set's size.
     void Merge(const WordSet& other);
 
-    // Keeps only the words that are also in `other`, or only those that aren't.
-    void Intersect(const WordSet& other);
-    void Subtract(const WordSet& other);
-
     // The words as byte ranges in ascending order. Ranges at most `max_gap` bytes apart are joined, with the words
     // between them.
     std::vector<ByteRange> Ranges(uint32_t max_gap = 0) const;

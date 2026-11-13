@@ -39,6 +39,7 @@ const std::vector<GameProfile>& Profiles()
         games::NusNsmeUsaMusic(),
         games::NusNsmeUsa(),
         games::NusNwreUsaRev1(),
+        games::NusNx2eUsa(),
         games::NusNyseUsa(),
         games::NusNzseUsa(),
     };

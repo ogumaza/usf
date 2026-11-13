@@ -25,6 +25,12 @@
 //   with a call of the audio update at 0x8019E014, which reads the queue. Gameplay has a frame of three video fields.
 // - The snapshot takes over the game thread at the frame function's first call. Later calls aren't quiet: the audio
 //   thread keeps AI's second buffer waiting.
+// - The game's interrupt manager at 0x80099EF0 sends a message to each of its clients at every retrace, at 0x80081390,
+//   whether the game draws or not. Each of its four client queues (0x801F81C0, 0x801F8500, 0x801FB39C and 0x801FB69C)
+//   has a thread of its own that waits on it, and none is the game thread. The driver therefore makes a queue and adds
+//   it to the manager's clients, through osCreateMesgQueue at 0x8008F240 and the manager's function at 0x80081250. It
+//   waits on it through osRecvMesg at 0x80087ED0. Only the idle thread (0x80099520, priority 0) has a lower priority
+//   than the game thread (0x801F8608, priority 9). The idle loop at 0x800805C0 is a branch to itself.
 // - A probe of each sequence found none that uses a reverb other than the first. All the game's audio set-ups share
 //   that reverb.
 // - The function at 0x80197538 runs the jumps of all scripts. At 0x801976B8 the new script address is in t9 and the
@@ -67,6 +73,12 @@ constexpr uint32_t kChannelShift = 8;
 
 // The end of the Expansion Pak's memory. Runs of the game hold zeros there.
 constexpr uint32_t kDriverAddress = 0x807FF000;
+
+// The driver's retrace client, 3 KB after the driver's start. The driver must end before it. Setting `end` to it
+// makes BuildCallDriver check that.
+constexpr RetraceClient kRetraceClient = {
+    .address = kDriverAddress + 0xC00, .create_queue = 0x8008F240, .add_client = 0x80081250, .manager = 0x80099EF0};
+constexpr uint32_t kRecvMesg = 0x80087ED0;
 
 struct Title
 {
@@ -391,6 +403,7 @@ GameProfile NusNzseUsa()
 
     CallDriverOptions driver;
     driver.address = kDriverAddress;
+    driver.end = kRetraceClient.address;
     driver.start_calls = {{.function = kQueueCommand, .arguments = {{.value = kSetStereo}}},
                           {.function = kQueueCommand, .arguments = {{.track = true}}, .track_mask = kDayMask}};
     for (const DayVersion& version : kDayVersions)
@@ -409,7 +422,14 @@ GameProfile NusNzseUsa()
                                       .track_value = day << kDayShift});
     }
 
+    // Between frames the driver waits for three retrace messages on a queue of its own. The idle thread runs meanwhile.
+    for (const GameCall& call : AddRetraceClient(kRetraceClient))
+    {
+        driver.start_calls.push_back(call);
+    }
+
     driver.frame_calls = {{.function = kAudioUpdate}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceClient.address);
     driver.fields = 3;
     profile.driver = BuildCallDriver(driver);
 

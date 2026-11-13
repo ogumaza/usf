@@ -198,6 +198,61 @@ void DriverArguments()
     XSFLIB_CHECK(system.ReadPhysical32(kResults + 12) == 0x21);
 }
 
+// With a wait call, the driver makes the frame calls and then the wait call `fields` times in each frame.
+void DriverWaitCall()
+{
+    usf::rip::CallDriverOptions options;
+    options.address = kKseg0 | kDriver;
+    usf::rip::GameCall frame;
+    frame.function = Counter(0);
+    options.frame_calls = {frame};
+    usf::rip::GameCall wait;
+    wait.function = Counter(1);
+    options.wait_call = wait;
+    options.fields = 3;
+
+    const auto owner = RunDriver(usf::rip::BuildCallDriver(options), 0);
+    usf::n64::System& system = *owner;
+
+    // The counters return at once, so the run stops anywhere in a frame.
+    const uint32_t frames = CounterValue(system, 0);
+    const uint32_t waits = CounterValue(system, 1);
+    XSFLIB_CHECK(frames > 100);
+    XSFLIB_CHECK(waits + 3 >= 3 * frames && waits <= 3 * frames);
+}
+
+// A message wait and a message drop call osRecvMesg on the queue with no message pointer, with OS_MESG_BLOCK and
+// OS_MESG_NOBLOCK.
+void MessageCalls()
+{
+    const usf::rip::GameCall wait = usf::rip::MessageWait(0x80001000, 0x80002000);
+    const usf::rip::GameCall drop = usf::rip::MessageDrop(0x80001000, 0x80002000);
+
+    XSFLIB_CHECK(wait.function == 0x80001000 && drop.function == 0x80001000);
+    XSFLIB_CHECK(wait.arguments.size() == 3 && drop.arguments.size() == 3);
+    XSFLIB_CHECK(wait.arguments[0].value == 0x80002000 && drop.arguments[0].value == 0x80002000);
+    XSFLIB_CHECK(wait.arguments[1].value == 0 && drop.arguments[1].value == 0);
+    XSFLIB_CHECK(wait.arguments[2].value == 1 && drop.arguments[2].value == 0);
+}
+
+// A retrace client's queue holds one message. Its buffer follows the queue's 24 bytes, and the client's record follows
+// the buffer.
+void RetraceClientCalls()
+{
+    const usf::rip::RetraceClient client = {
+        .address = 0x80003000, .create_queue = 0x80001100, .add_client = 0x80001200, .manager = 0x80004000};
+
+    const std::vector<usf::rip::GameCall> calls = usf::rip::AddRetraceClient(client);
+
+    XSFLIB_CHECK(calls.size() == 2);
+    XSFLIB_CHECK(calls[0].function == 0x80001100 && calls[0].arguments.size() == 3);
+    XSFLIB_CHECK(calls[0].arguments[0].value == 0x80003000 && calls[0].arguments[1].value == 0x80003018 &&
+                 calls[0].arguments[2].value == 1);
+    XSFLIB_CHECK(calls[1].function == 0x80001200 && calls[1].arguments.size() == 3);
+    XSFLIB_CHECK(calls[1].arguments[0].value == 0x80004000 && calls[1].arguments[1].value == 0x8000301C &&
+                 calls[1].arguments[2].value == 0x80003000);
+}
+
 // The driver's address must be in KSEG0.
 void DriverOutsideKseg0()
 {
@@ -232,6 +287,28 @@ void TooManyArguments()
     XSFLIB_CHECK(error.find("at most four arguments") != std::string::npos);
 }
 
+// A driver may end at its `end`, and not past it.
+void DriverEnd()
+{
+    usf::rip::CallDriverOptions options;
+    options.address = 0x80010000;
+    options.start_calls = {{.function = 0x80020000}};
+    const size_t bytes = 4 * usf::rip::BuildCallDriver(options).code.size();
+
+    options.end = options.address + static_cast<uint32_t>(bytes);
+    XSFLIB_CHECK(usf::rip::BuildCallDriver(options).code.size() * 4 == bytes);
+
+    options.end -= 4;
+    const auto build = [&options]
+    {
+        usf::rip::BuildCallDriver(options);
+    };
+
+    const std::string error = xsflib::testing::ErrorOf<std::invalid_argument>(build);
+
+    XSFLIB_CHECK(error.find("past its end at 0x") != std::string::npos);
+}
+
 } // namespace
 
 int main()
@@ -242,7 +319,11 @@ int main()
                                         Encodings();
                                         DriverRun();
                                         DriverArguments();
+                                        DriverWaitCall();
+                                        MessageCalls();
+                                        RetraceClientCalls();
                                         DriverOutsideKseg0();
                                         TooManyArguments();
+                                        DriverEnd();
                                     });
 }

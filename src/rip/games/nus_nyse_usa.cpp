@@ -26,6 +26,13 @@
 //   frequency (0x04).
 // - The sound frame at 0x80010558 runs the music layer and sends its commands. The game loop at 0x80068E24 calls it
 //   once a frame, every second video field.
+// - The game's scheduler at 0x801001F8 sends a message to each of its clients at every retrace, at 0x80075224, whether
+//   the game draws or not. Each of its three client queues (0x8010A1B0, 0x8010A718 and 0x8010DF98) has a thread of its
+//   own that waits on it, and none is the game thread. The game thread's waits in a frame, at 0x80071704 and
+//   0x80073004, are on queues that get no message while the game doesn't draw. The driver therefore makes a queue and
+//   adds it to the scheduler's clients, through osCreateMesgQueue at 0x8008AE20 and the scheduler's function at
+//   0x80075120. It waits on it through osRecvMesg at 0x800824B0. Only the idle thread (0x800FD038, priority 0) has a
+//   lower priority than the game thread (0x800FD408, priority 10). The idle loop at 0x8006736C is a branch to itself.
 // - The script reader's flow control at 0x8000D398 handles a sequence's absolute jumps (commands 0xF5 and 0xF9 to 0xFB)
 //   at 0x8000D50C to 0x8000D51C. At 0x8000D518 the new script address is in t9, the script's state in a1 and the
 //   sequence player in a0. Music plays on sequence player 0, at 0x800B7740. The state of its script is at 0x800B77B4.
@@ -67,6 +74,12 @@ constexpr uint32_t kMusicScript = 0x800B77B4;
 
 // RDRAM that runs of the game hold at zero, from 0x8022D200 to 0x8031E000.
 constexpr uint32_t kDriverAddress = 0x8031D000;
+
+// The driver's retrace client, 3 KB after the driver's start. The driver must end before it. Setting `end` to it
+// makes BuildCallDriver check that.
+constexpr RetraceClient kRetraceClient = {
+    .address = kDriverAddress + 0xC00, .create_queue = 0x8008AE20, .add_client = 0x80075120, .manager = 0x801001F8};
+constexpr uint32_t kRecvMesg = 0x800824B0;
 
 // A track's number contains the music number in bits 0 to 7, the mood in bits 8 to 11 and the phase of music 0x0F in
 // bits 12 to 15.
@@ -223,6 +236,7 @@ GameProfile NusNyseUsa()
 
     CallDriverOptions driver;
     driver.address = kDriverAddress;
+    driver.end = kRetraceClient.address;
     driver.start_calls = {
         {.function = kSetMusic, .arguments = {{.track = true, .mask = kMusicMask}}},
         // The stop passes 0 in a1. So do the game's stops at 0x80018FB4 and 0x8001AB04.
@@ -244,7 +258,14 @@ GameProfile NusNyseUsa()
                                       .track_value = static_cast<uint32_t>(phase) << kPhaseShift});
     }
 
+    // Between frames the driver waits for two retrace messages on a queue of its own. The idle thread runs meanwhile.
+    for (const GameCall& call : AddRetraceClient(kRetraceClient))
+    {
+        driver.start_calls.push_back(call);
+    }
+
     driver.frame_calls = {{.function = kSoundFrame}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceClient.address);
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 

@@ -4,6 +4,8 @@
 
 #include <utility>
 
+#include "n64/save_state.h"
+
 namespace usf::rip
 {
 namespace
@@ -36,6 +38,32 @@ Chunk StateChunk(const std::vector<uint8_t>& state, uint32_t offset, uint32_t le
     return chunk;
 }
 
+// The state without the words of RDRAM that are zero. The header and the RSP memory stay whole.
+std::vector<Chunk> StateChunksWithoutZeroWords(const std::vector<uint8_t>& state)
+{
+    const auto rdram_size = static_cast<uint32_t>(state.size() - kStateOverhead);
+    const uint8_t* rdram = state.data() + n64::kStateRdramOffset;
+    WordSet nonzero(rdram_size);
+    for (uint32_t word = 0; word < rdram_size / 4; word++)
+    {
+        const uint8_t* bytes = rdram + size_t{4} * word;
+        if ((bytes[0] | bytes[1] | bytes[2] | bytes[3]) != 0)
+        {
+            nonzero.AddWord(word);
+        }
+    }
+
+    std::vector<Chunk> chunks{StateChunk(state, 0, n64::kStateRdramOffset)};
+    for (const n64::ByteRange& range : nonzero.Ranges(kMaxGap))
+    {
+        chunks.push_back(StateChunk(state, n64::kStateRdramOffset + range.offset, range.length));
+    }
+
+    chunks.push_back(StateChunk(state, n64::kStateRdramOffset + rdram_size, kStateOverhead - n64::kStateRdramOffset));
+
+    return chunks;
+}
+
 std::vector<Chunk> RomChunks(const std::vector<uint8_t>& rom, const WordSet& words)
 {
     std::vector<Chunk> chunks;
@@ -60,12 +88,11 @@ TrackWords WordsOf(const n64::Coverage& coverage, uint32_t rom_image_size, uint3
 
 SetSections BuildSet(const Snapshot& snapshot, const std::vector<Track>& tracks, const std::vector<TrackWords>* words)
 {
-    // The library holds the whole state, RDRAM included. The legacy players' timing can reach RDRAM words that the
-    // core's runs never read.
     SetSections set;
-    set.library.state = std::vector<Chunk>{StateChunk(snapshot.state, 0, static_cast<uint32_t>(snapshot.state.size()))};
     if (words == nullptr)
     {
+        set.library.state =
+            std::vector<Chunk>{StateChunk(snapshot.state, 0, static_cast<uint32_t>(snapshot.state.size()))};
         set.library.rom.emplace();
         const auto rom_bytes = static_cast<uint32_t>((snapshot.rom.size() + 3) & ~size_t{3});
         if (rom_bytes != 0)
@@ -75,25 +102,18 @@ SetSections BuildSet(const Snapshot& snapshot, const std::vector<Track>& tracks,
     }
     else
     {
-        // The ROM words that every track read go in the library, and the rest of each track's in its mini.
-        WordSet common = words->front().rom;
-        for (const TrackWords& track : *words)
-        {
-            common.Intersect(track.rom);
-        }
-        set.library.rom = RomChunks(snapshot.rom, common);
+        // The library holds the state's value for every word of RDRAM, whether a run read it or not. The legacy
+        // players' timing can reach RDRAM words that the core's runs never read. A word that is zero takes no chunk: a
+        // player fills the state image with zeros before it loads the library.
+        set.library.state = StateChunksWithoutZeroWords(snapshot.state);
 
+        // Every ROM word that a track read goes in the library. A mini holds only its selector and its patches.
+        WordSet read = words->front().rom;
         for (const TrackWords& track : *words)
         {
-            WordSet rest = track.rom;
-            rest.Subtract(common);
-            Sections mini;
-            if (rest.Count() != 0)
-            {
-                mini.rom = RomChunks(snapshot.rom, rest);
-            }
-            set.minis.push_back(std::move(mini));
+            read.Merge(track.rom);
         }
+        set.library.rom = RomChunks(snapshot.rom, read);
     }
 
     // Each mini writes its number into the selector, and its patches.

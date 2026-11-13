@@ -25,6 +25,11 @@
 //   Its track plays for 5 s and fades out over 2 s.
 // - A track's number is the sound's code. Its title gives the bank and the sound's number, and a description where one
 //   is known.
+// - The game's main thread (0x8033A8E0, priority 100) sends a message to the queue at 0x8033B010 at each retrace, at
+//   0x802467DC, through the handler that the word at 0x8032D564 points to. It sends it whether the game draws or not.
+//   The queue holds one message, and it holds one at the snapshot. The game thread (0x8033AA90, priority 10) waits for
+//   two of them in each frame, at 0x8024810C and 0x80248154, through osRecvMesg at 0x80322800. Only the idle thread
+//   (0x8033A730, priority 0) has a lower priority. Its loop at 0x80246DD8 is a branch to itself.
 
 #include <vector>
 
@@ -40,6 +45,8 @@ constexpr uint32_t kPlaySound = 0x8031EB00;
 constexpr uint32_t kGlobalSource = 0x803331F0;
 constexpr uint32_t kGameLoopTick = 0x8031FD84;
 constexpr uint32_t kAfterSoundReset = 0x802491D8;
+constexpr uint32_t kRecvMesg = 0x80322800;
+constexpr uint32_t kRetraceQueue = 0x8033B010;
 
 // The last lines of the third frame buffer (0x803DA800 to 0x80400000). The game's set-up stores the three frame
 // buffers' addresses at 0x802489C4 to 0x80248A20: 0x8038F800, 0x803B5000 and 0x803DA800. Only the RDP writes there, and
@@ -510,7 +517,8 @@ GameProfile NusNsmeUsa()
 
     // The driver takes over the game thread at the first return from the sound reset. It requests the track's sound
     // once. A sound that plays only while requested is requested again in each of the first 150 frames. Each frame ends
-    // with the game-loop tick. A frame is two fields, as in the game.
+    // with the game-loop tick. A frame is two retraces, as in the game. The driver drops the message that waits at the
+    // snapshot, then waits for two messages in each frame, as the game thread does. The idle thread runs meanwhile.
     profile.snapshot_address = kAfterSoundReset;
     profile.snapshot_hit = 1;
     profile.quiet_tries = 30;
@@ -520,13 +528,15 @@ GameProfile NusNsmeUsa()
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {
-        {.function = kPlaySound, .arguments = kArguments, .track_mask = kDiscrete, .track_value = kDiscrete}};
+        {.function = kPlaySound, .arguments = kArguments, .track_mask = kDiscrete, .track_value = kDiscrete},
+        MessageDrop(kRecvMesg, kRetraceQueue)};
     driver.frame_calls = {{.function = kPlaySound,
                            .arguments = kArguments,
                            .track_mask = kDiscrete,
                            .track_value = 0,
                            .frames = kHeldFrames},
                           {.function = kGameLoopTick}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 

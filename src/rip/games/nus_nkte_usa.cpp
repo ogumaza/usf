@@ -19,6 +19,11 @@
 //   At 0x800C0CA4 the new script address is in t3 and the sequence player in s1.
 // - The reader handles the end of a counted loop (command 0xF7) at 0x800C0C0C and the relative jumps (commands 0xF2 to
 //   0xF4) at 0x800C0CAC. The watch below doesn't see them.
+// - The game's main thread (0x80154670, priority 100) sends a message at each retrace, at 0x8000226C, to the queue that
+//   the word at 0x800DC4A4 points to: 0x8014EF70. It sends it whether the game draws or not. The queue holds one
+//   message and is empty at the snapshot. The game thread (priority 10) waits for two of them in each frame, at
+//   0x80000F90 and 0x80000FDC, through osRecvMesg at 0x800CD750. Only the idle thread (0x801524C0, priority 0) has a
+//   lower priority. Its loop at 0x800005B8 is a branch to itself.
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
@@ -32,6 +37,8 @@ namespace
 
 constexpr uint32_t kPlaySequence = 0x800C8EAC;
 constexpr uint32_t kGameLoopTick = 0x800CB2C4;
+constexpr uint32_t kRecvMesg = 0x800CD750;
+constexpr uint32_t kRetraceQueue = 0x8014EF70;
 constexpr uint32_t kSequenceJump = 0x800C0CA4;
 
 // The last lines of the frame buffer at 0x803DA800 to 0x80400000. Runs of the game hold zeros there. Only the RDP
@@ -71,7 +78,8 @@ GameProfile NusNkteUsa()
     profile.eeprom = n64::EepromType::k4Kbit;
 
     // The driver takes over the game thread at the tick's first call. It starts the track's sequence once, then runs
-    // the tick every second field, as the game does. Later calls of the tick aren't quiet: the audio thread keeps the
+    // the tick every second field, as the game does. Between ticks it waits for two retrace messages, as the game
+    // thread does. The idle thread runs meanwhile. Later calls of the tick aren't quiet: the audio thread keeps the
     // AI's second buffer waiting, and the RSP runs the game's graphics.
     profile.snapshot_address = kGameLoopTick;
     profile.snapshot_hit = 1;
@@ -82,6 +90,7 @@ GameProfile NusNkteUsa()
     driver.address = kDriverAddress;
     driver.start_calls = {{.function = kPlaySequence, .arguments = {{.track = true}}}};
     driver.frame_calls = {{.function = kGameLoopTick}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 

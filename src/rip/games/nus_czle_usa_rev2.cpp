@@ -17,6 +17,12 @@
 //   call of the audio update at 0x800C4490, which reads the queue. Gameplay has a frame of three video fields.
 // - The snapshot takes over the game thread at the frame function's first call. Audio buffers start soon after. The
 //   first calls are quiet. Later ones aren't: the audio thread keeps AI's second buffer waiting.
+// - The game's interrupt manager at 0x8011E038 sends a message to each of its clients at every retrace, at 0x800AD5B4,
+//   whether the game draws or not. Each of its four client queues (0x800081B0, 0x8011D978, 0x8011DC28 and 0x801215BC)
+//   has a thread of its own that waits on it, and none is the game thread. The driver therefore makes a queue and adds
+//   it to the manager's clients, through osCreateMesgQueue at 0x800043E0 and the manager's function at 0x800AD460. It
+//   waits on it through osRecvMesg at 0x800021F0. Only the idle thread (0x80006D80, priority 0) has a lower priority
+//   than the game thread (0x8011E2B8, priority 11). The idle loop at 0x80000810 is a branch to itself.
 // - The audio thread makes no RSP tasks until the function at 0x800014E8 clears a flag. The game calls it under the
 //   logos. The driver calls it first.
 // - Audio set-up 0 is in force at the snapshot. Each scene's header names a set-up. The set-ups differ in their second
@@ -69,6 +75,12 @@ constexpr uint32_t kSetTowerLevel = 0x800C5CD8;
 // The last lines of the frame buffer at the end of RAM. Only the RDP writes there, and it draws nothing after the
 // snapshot.
 constexpr uint32_t kDriverAddress = 0x803FF000;
+
+// The driver's retrace client, 3 KB after the driver's start. The driver must end before it. Setting `end` to it
+// makes BuildCallDriver check that.
+constexpr RetraceClient kRetraceClient = {
+    .address = kDriverAddress + 0xC00, .create_queue = 0x800043E0, .add_client = 0x800AD460, .manager = 0x8011E038};
+constexpr uint32_t kRecvMesg = 0x800021F0;
 
 struct Title
 {
@@ -278,6 +290,7 @@ GameProfile NusCzleUsaRev2()
 
     CallDriverOptions driver;
     driver.address = kDriverAddress;
+    driver.end = kRetraceClient.address;
     driver.start_calls = {{.function = kEnableAudio},
                           {.function = kQueueCommand, .arguments = {{.value = kSetStereo}}},
                           {.function = kQueueCommand,
@@ -285,6 +298,12 @@ GameProfile NusCzleUsaRev2()
                            .track_mask = 0xFF,
                            .track_value = kGanonsTower},
                           {.function = kQueueCommand, .arguments = {{.track = true}}}};
+    // Between frames the driver waits for three retrace messages on a queue of its own. The idle thread runs meanwhile.
+    for (const GameCall& call : AddRetraceClient(kRetraceClient))
+    {
+        driver.start_calls.push_back(call);
+    }
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceClient.address);
     // The level call: after the tenth audio update, for no track until a mini's patch turns it on.
     driver.frame_calls = {{.function = kAudioUpdate},
                           {.function = kSetTowerLevel,

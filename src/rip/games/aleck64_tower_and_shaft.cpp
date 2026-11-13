@@ -16,6 +16,11 @@
 // - The graphics thread (0x8013A0F8) calls the function at 0x80027190 once a frame. That function reads the board's
 //   inputs at 0xE0800000, through a TLB entry that the players refuse. The ripper stops the thread. The music runs in
 //   the music library's thread.
+// - The graphics thread makes the message queue at 0x8013B0E8 at 0x80086BDC, and adds it to the scheduler's clients at
+//   0x80086BEC. At each retrace the scheduler sends a message to its clients, at 0x800855C4, whether the game draws or
+//   not. The graphics thread waits for its messages at 0x80086C08, through osRecvMesg at 0x8008E580. The queue is empty
+//   at the snapshot. With the graphics thread stopped, the main thread (0x80127410, priority 10) can wait for them.
+//   Only the idle thread (0x80127260, priority 0) has a lower priority. Its loop at 0x8007B764 is a branch to itself.
 // - Each channel of a song loops separately. At 0x8007EEFC the library has reached the end of a loop, with its count in
 //   v1, the channel in a0 and the loop's depth in a2. A count of 0xFF repeats for ever. At 0x8007F0AC the library takes
 //   a channel's jump, with the channel in a0. There a2 holds the jump's target. The target is an offset into the
@@ -39,6 +44,8 @@ constexpr uint32_t kFrameSound = 0x8003919C;
 constexpr uint32_t kLoopEnd = 0x8007EEFC;
 constexpr uint32_t kGoTo = 0x8007F0AC;
 constexpr uint32_t kGraphicsThread = 0x8013A0F8;
+constexpr uint32_t kRecvMesg = 0x8008E580;
+constexpr uint32_t kGraphicsQueue = 0x8013B0E8;
 
 constexpr uint32_t kSongs = 19;
 
@@ -70,6 +77,9 @@ GameProfile Aleck64TowerAndShaft()
     driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}}}};
     driver.frame_calls = {{.function = kFrameSound}};
+    // Between frames the driver waits for a retrace message on the graphics thread's queue. The idle thread runs
+    // meanwhile.
+    driver.wait_call = MessageWait(kRecvMesg, kGraphicsQueue);
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(

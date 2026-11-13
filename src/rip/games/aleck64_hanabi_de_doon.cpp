@@ -13,6 +13,11 @@
 // - The game's logic runs in the graphics thread (0x800A6BA8), and the main thread waits in the loop at 0x80025F2C. The
 //   snapshot takes over the main thread there, 0.84 s after boot, and stops the graphics thread. The sound banks have
 //   loaded by then.
+// - The graphics thread makes the message queue at 0x800A6DB8 at 0x8002D3BC, and adds it to the scheduler's clients at
+//   0x8002D3CC. At each retrace the scheduler sends a message to its clients, at 0x8002BCE4, whether the game draws or
+//   not. The graphics thread waits for its messages at 0x8002D3E8, through osRecvMesg at 0x8003C9B0. The queue is empty
+//   at the snapshot. With the graphics thread stopped, the main thread (0x80055940, priority 10) can wait for them.
+//   Only the idle thread (0x80055790, priority 0) has a lower priority. Its loop at 0x800266B4 is a branch to itself.
 // - Each song is one wave on one channel of the library. The library streams the wave from the cartridge, and the
 //   wave's loop repeats the song. The table of lengths holds where the second pass ends, measured from the cartridge
 //   reads of runs in usf's core. Songs 0x0C and 0x17 to 0x1B hold no loop. Song 0x0F ends in a short loop of silence.
@@ -30,6 +35,8 @@ namespace
 constexpr uint32_t kMainThreadWait = 0x80025F2C;
 constexpr uint32_t kAskForSong = 0x8014009C;
 constexpr uint32_t kFrameSound = 0x801401BC;
+constexpr uint32_t kRecvMesg = 0x8003C9B0;
+constexpr uint32_t kGraphicsQueue = 0x800A6DB8;
 constexpr uint32_t kGraphicsThread = 0x800A6BA8;
 
 // The numbers in the table at 0x80166A00.
@@ -69,6 +76,9 @@ GameProfile Aleck64HanabiDeDoon()
     // only the function at 0x80140060 reads. That function returns the song asked for.
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}, {.value = 1}, {.value = 0}}}};
     driver.frame_calls = {{.function = kFrameSound}};
+    // Between frames the driver waits for a retrace message on the graphics thread's queue. The idle thread runs
+    // meanwhile.
+    driver.wait_call = MessageWait(kRecvMesg, kGraphicsQueue);
     profile.driver = BuildCallDriver(driver);
 
     for (const uint32_t number : kSongs)

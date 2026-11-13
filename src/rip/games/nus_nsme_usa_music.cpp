@@ -7,8 +7,10 @@
 //
 // - The play-music function at 0x803219AC takes a sequence player in a0, the sequence in the low byte of a1 and a
 //   priority in its high byte, and a fade-in in a2. For player 0, the level's music, it keeps a queue by priority and
-//   starts the sequence at the volume that the table at 0x80333188 gives it (through 0x80320F68). For another player it
-//   starts the sequence through 0x80320544 at the sequence's own volume. Bit 7 of the sequence is its variation, which
+//   starts the sequence at the volume that the table at 0x80333188 gives it (through 0x80320F68). The credits, sequence
+//   0x1A, are the exception: 0x80320F68 returns at 0x80320F94 for them before it reads the table, and they play at the
+//   85 that their script sets. For another player it starts the sequence through 0x80320544 at the volume that the
+//   sequence's script sets. Bit 7 of the sequence is its variation, which
 //   the sequence's script reads.
 // - The sound reset at 0x80322230 takes an audio set-up in a0, 0 to 7, from the table at 0x803332A0. The set-ups differ
 //   in their reverb and their number of voices. The levels' scripts start their music through 0x80249178, which resets
@@ -27,6 +29,8 @@
 // - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x8031DDD0 to 0x8031DE2C.
 //   At 0x8031DE28 the new script address is in t7 and the sequence player in s1. Players 0 and 1 are at 0x80222618 and
 //   0x80222758.
+// - The game thread waits for two retrace messages in each frame through osRecvMesg at 0x80322800, on the queue at
+//   0x8033B010. The sound effects' profile has the details.
 //
 // A track's number holds what the driver passes to the game's functions: the sequence in bits 0 to 7, the audio set-up
 // in bits 8 to 10, a sound reset in bit 11, player 1 in bit 12, a volume for player 1 in bit 13 with the volume in bits
@@ -48,6 +52,8 @@ constexpr uint32_t kSoundReset = 0x80322230;
 constexpr uint32_t kSetPlayerVolume = 0x8031E710;
 constexpr uint32_t kGameLoopTick = 0x8031FD84;
 constexpr uint32_t kAfterSoundReset = 0x802491D8;
+constexpr uint32_t kRecvMesg = 0x80322800;
+constexpr uint32_t kRetraceQueue = 0x8033B010;
 constexpr uint32_t kSequenceJump = 0x8031DE28;
 constexpr uint32_t kPlayer0 = 0x80222618;
 constexpr uint32_t kPlayer1 = 0x80222758;
@@ -234,7 +240,8 @@ GameProfile NusNsmeUsaMusic()
     // The driver takes over the game thread at the first return from the sound reset, as in the sound effects' profile.
     // It resets the sound with the track's set-up, unless the track uses the snapshot's set-up 0. It then starts the
     // sequence on its player, and sets player 1's volume where the game does. Each frame ends with the game-loop tick.
-    // A frame is two fields, as in the game.
+    // A frame is two retraces, as in the game. As in the sound effects' profile, the driver drops the message that
+    // waits at the snapshot and then waits for the retrace messages.
     profile.snapshot_address = kAfterSoundReset;
     profile.snapshot_hit = 1;
     profile.quiet_tries = 30;
@@ -261,8 +268,10 @@ GameProfile NusNsmeUsaMusic()
          .arguments = {{.value = 1}, {.value = 1}, {.track = true, .right_shift = kVolumeShift, .mask = kVolumeMask}},
          .track_mask = kVolumeFlag,
          .track_value = kVolumeFlag},
+        MessageDrop(kRecvMesg, kRetraceQueue),
     };
     driver.frame_calls = {{.function = kGameLoopTick}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 

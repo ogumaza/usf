@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(usf VERSION 1.1.1 LANGUAGES C CXX)
+project(usf VERSION 1.2.0 LANGUAGES C CXX)
 
 # xsflib is a library for players and rippers of the PSF family. It's a submodule. Its XsflibProject.cmake sets what a
 # project built on it starts with: C++20, a release build by default, the static C runtime, the options that keep the
@@ -127,6 +127,7 @@ add_library(usf_rip STATIC
     src/rip/games/nus_nsme_usa.cpp
     src/rip/games/nus_nsme_usa_music.cpp
     src/rip/games/nus_nwre_usa_rev1.cpp
+    src/rip/games/nus_nx2e_usa.cpp
     src/rip/games/nus_nyse_usa.cpp
     src/rip/games/nus_nzse_usa.cpp
     src/rip/games/tracks.cpp

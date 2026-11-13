@@ -22,6 +22,7 @@ don't rip.
 - Chameleon Twist (USA, revision 1)
 - Chameleon Twist 2 (USA)
 - Cruis'n World (USA)
+- Gex 64: Enter the Gecko (USA)
 - GoldenEye 007 (USA)
 - Hey You, Pikachu! (USA)
 - The Legend of Zelda: Majora's Mask (USA)
@@ -97,10 +98,12 @@ that a save state can't record. Each track then runs from that state, with the t
   end of the sound.
 - Coverage records every ROM word that the run reads. The run lasts for the length and fade of the track, half the
   length more for a track that loops, and a margin of 10 s.
-- The set keeps only those ROM words. The library contains the ROM words that every track reads, and the whole save
-  state: the registers, all of RDRAM and the RSP memory. Each mini contains the rest of the ROM words for its track,
-  and the track number. RDRAM isn't trimmed. The legacy players time the hardware differently from the core, and a
-  game running in them can read RDRAM that the core never read.
+- The set keeps only those ROM words. The library contains every ROM word that a track reads, and the save state: the
+  registers, RDRAM and the RSP memory. Each mini contains only the track number and the few words of the state that
+  its track changes, so a mini is a few hundred bytes. The library leaves out the words of RDRAM that are zero. The
+  USF format has a player fill the save state with zeros before it loads a set, so those words still read as zero.
+  RDRAM isn't trimmed by coverage. The legacy players time the hardware differently from the core, and a game running
+  in them can read RDRAM that the core never read.
 
 At the end, `usfrip` loads each mini with its library, as a player would. It checks that the mini renders the same
 samples as the untrimmed state over its length and fade.

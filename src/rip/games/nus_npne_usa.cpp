@@ -12,6 +12,10 @@
 //   game thread there.
 // - Each channel of a song loops separately. At 0x8008EAD4 the library has reached the end of a loop that repeats for
 //   ever, with the channel in a0 and the loop's depth in a2.
+// - At each retrace the scheduler sends a message to its clients, at 0x8009EC0C, whether the game draws or not. The
+//   game thread (0x800CED88, priority 10) waits for them on the queue at 0x801C7058, at the top of its main loop at
+//   0x80000A24, through osRecvMesg at 0x8009DDC0. The queue is full at the snapshot: it contains eight messages. Only
+//   the idle thread (0x800CEF38, priority 0) has a lower priority. The idle loop at 0x80000610 is a jump to itself.
 
 #include <algorithm>
 #include <cstdio>
@@ -31,6 +35,9 @@ constexpr uint32_t kAudioUpdate = 0x800039C0;
 constexpr uint32_t kPlaySong = 0x80005130;
 constexpr uint32_t kSongTable = 0x800B3FB0;
 constexpr uint32_t kEndlessLoop = 0x8008EAD4;
+constexpr uint32_t kRecvMesg = 0x8009DDC0;
+constexpr uint32_t kRetraceQueue = 0x801C7058;
+constexpr int kQueuedMessages = 8;
 
 constexpr int kSongs = 72;
 
@@ -75,7 +82,14 @@ GameProfile NusNpneUsa()
     // a2 picks the song's player. The call passes 0 in a2 and a3. So does the game's call at 0x800065C4.
     driver.start_calls = {
         {.function = kPlaySong, .arguments = {{.value = kSongTable}, {.track = true}, {.value = 0}, {.value = 0}}}};
+    // The driver drops the messages that wait at the snapshot. Between frames it waits for a retrace message, as the
+    // game thread does. The idle thread runs meanwhile.
+    for (int i = 0; i < kQueuedMessages; i++)
+    {
+        driver.start_calls.push_back(MessageDrop(kRecvMesg, kRetraceQueue));
+    }
     driver.frame_calls = {{.function = kAudioUpdate}};
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     profile.driver = BuildCallDriver(driver);
 
     profile.loop_watches.push_back(

@@ -16,6 +16,14 @@
 //   function at 0x802ECBCC takes the scale in a1.
 // - Each channel of a song loops separately. At 0x802F1254 the library has reached the end of a loop, with its count in
 //   v1, the channel in a0 and the loop's depth in a2. A count of 0xFF repeats for ever.
+// - At each retrace the scheduler sends a message to its clients, at 0x80032574, whether the game draws or not. The
+//   game thread (0x80061D98, priority 50) waits for them on the queue at 0x80061F50, at 0x80032018, through osRecvMesg
+//   at 0x80032DE0. The queue is full at the snapshot: it holds eight messages.
+// - Only the idle thread (0x8005BE30, priority 0) has a lower priority. The idle loop at 0x80031D90 loads the word at
+//   0x80061F6C until it isn't zero, and then calls the function that the word points to. Only the boot code stores to
+//   that word, zero each time: at 0x8003118C, and through 0x80031DC4 at 0x80031E78. The legacy players skip only a loop
+//   that branches to itself. The profile therefore makes the loop's branch at 0x80031D98 branch to itself. The thread
+//   then does nothing, as before, in a loop that the players skip.
 
 #include <iterator>
 
@@ -33,6 +41,10 @@ constexpr uint32_t kSelectSong = 0x802ECD54;
 constexpr uint32_t kFrameSound = 0x802ECC60;
 constexpr uint32_t kLoopEnd = 0x802F1254;
 constexpr uint32_t kSetTempo = 0x802ECBCC;
+constexpr uint32_t kRecvMesg = 0x80032DE0;
+constexpr uint32_t kRetraceQueue = 0x80061F50;
+constexpr int kQueuedMessages = 8;
+constexpr uint32_t kIdleBranch = 0x80031D98;
 
 // A track's number holds the song's place in the table, and a second version above it.
 constexpr uint16_t kPlaceMask = 0xFF;
@@ -100,9 +112,20 @@ GameProfile NusNm8eUsa()
     profile.quiet_tries = 1;
     profile.boot_seconds = 8.0;
 
+    // The idle loop's branch, made to branch to itself. The delay slot is a nop already.
+    mips::Assembler idle(kIdleBranch);
+    idle.Beq(mips::kV0, mips::kZero, kIdleBranch);
+    profile.rdram_patches = {{.address = kIdleBranch, .words = {idle.Words().front()}}};
+
     CallDriverOptions driver;
     driver.address = kDriverAddress;
     driver.start_calls = {{.function = kSelectSong, .arguments = {{.track = true, .mask = kPlaceMask}}}};
+    // The driver drops the messages that wait at the snapshot. Between frames it waits for two retrace messages, as
+    // the game thread does. The idle thread runs meanwhile.
+    for (int i = 0; i < kQueuedMessages; i++)
+    {
+        driver.start_calls.push_back(MessageDrop(kRecvMesg, kRetraceQueue));
+    }
     driver.frame_calls = {{.function = kFrameSound}};
     for (const Tempo& tempo : kTempos)
     {
@@ -116,6 +139,7 @@ GameProfile NusNm8eUsa()
         driver.frame_calls.push_back(call);
     }
 
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 

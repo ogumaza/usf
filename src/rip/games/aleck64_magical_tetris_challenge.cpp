@@ -22,6 +22,10 @@
 // - The main loop waits for the next frame at 0x8000141C. The snapshot takes over the main loop there, at its 852nd
 //   arrival: 16.08 s after boot. The sample banks have loaded by then, and the attract mode asks for song 11 a few
 //   frames later.
+// - At each retrace the scheduler sends a message to its clients, at 0x8000081C, whether the game draws or not. The
+//   main thread (0x800E5410, priority 5) waits for them at 0x8000141C, through osRecvMesg at 0x8005FD20, on the queue
+//   at 0x800E3218 in its stack frame. The queue is empty at the snapshot. Only the idle thread (0x800E5920, priority
+//   1) has a lower priority among the threads that run. Its loop at 0x80001C58 is a jump to itself.
 
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
@@ -41,6 +45,8 @@ constexpr uint32_t kFrameSound = 0x8000663C;
 constexpr uint32_t kReadCoins = 0x800006CC;
 constexpr uint32_t kVideoThread = 0x800AC910;
 constexpr uint32_t kInputThread = 0x800B1EB8;
+constexpr uint32_t kRecvMesg = 0x8005FD20;
+constexpr uint32_t kMainLoopQueue = 0x800E3218;
 
 constexpr uint32_t kSongs = 15;
 
@@ -79,6 +85,9 @@ GameProfile Aleck64MagicalTetrisChallenge()
     driver.address = kAleck64DriverAddress;
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}}}};
     driver.frame_calls = {{.function = kFrameSound}};
+    // Between frames the driver waits for a retrace message, as the main loop does. The idle thread runs meanwhile. The
+    // queue is above the driver's stack frame.
+    driver.wait_call = MessageWait(kRecvMesg, kMainLoopQueue);
     profile.driver = BuildCallDriver(driver);
 
     for (uint32_t number = 0; number < kSongs; number++)

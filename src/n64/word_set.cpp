@@ -45,22 +45,6 @@ void WordSet::Merge(const WordSet& other)
     }
 }
 
-void WordSet::Intersect(const WordSet& other)
-{
-    for (size_t i = 0; i < bits_.size(); i++)
-    {
-        bits_[i] &= i < other.bits_.size() ? other.bits_[i] : 0;
-    }
-}
-
-void WordSet::Subtract(const WordSet& other)
-{
-    for (size_t i = 0; i < bits_.size() && i < other.bits_.size(); i++)
-    {
-        bits_[i] &= ~other.bits_[i];
-    }
-}
-
 std::vector<ByteRange> WordSet::Ranges(uint32_t max_gap) const
 {
     std::vector<ByteRange> ranges;

@@ -23,6 +23,12 @@
 //   list holds the jump's label in t0. At 0x8004EAB8 the function makes a jump's first pass, with the count in a1. At
 //   0x8004EA68 it makes a later pass, with the count left in v0. A song without such a jump stops at the end of its
 //   list.
+// - The game thread (0x800B1B90, priority 50) makes the message queue at 0x800B42F0 at 0x8006026C, and adds it to the
+//   scheduler's clients at 0x8006027C. At each retrace the scheduler sends a message to its clients, at 0x8005F0F8,
+//   whether the game draws or not. The queue is empty at the snapshot. The game thread waits for its messages at
+//   0x80060298, through osRecvMesg at 0x800656F0. Only two threads have a lower priority: the thread at 0x800A4420
+//   (priority 10), in a jump to itself at 0x80026054, and the idle thread (0x800A4270, priority 0), in a branch to
+//   itself at 0x8005E98C.
 
 #include <cstdio>
 #include <initializer_list>
@@ -42,6 +48,8 @@ namespace
 constexpr uint32_t kFirstSongSetup = 0x8014AC08;
 constexpr uint32_t kLoadSong = 0x800558D4;
 constexpr uint32_t kPlaySong = 0x80055970;
+constexpr uint32_t kRecvMesg = 0x800656F0;
+constexpr uint32_t kRetraceQueue = 0x800B42F0;
 constexpr uint32_t kLoopFirstPass = 0x8004EAB8;
 constexpr uint32_t kLoopLaterPass = 0x8004EA68;
 
@@ -424,6 +432,9 @@ GameProfile NusNmqeUsa()
         }
     }
 
+    // Between frames the driver waits for retrace messages, as the game thread does. The threads below it run
+    // meanwhile.
+    driver.wait_call = MessageWait(kRecvMesg, kRetraceQueue);
     driver.fields = kFieldsPerFrame;
     profile.driver = BuildCallDriver(driver);
 

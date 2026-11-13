@@ -45,6 +45,7 @@ GameProfile NusNpoeUsaRev2();
 GameProfile NusNsmeUsa();
 GameProfile NusNsmeUsaMusic();
 GameProfile NusNwreUsaRev1();
+GameProfile NusNx2eUsa();
 GameProfile NusNyseUsa();
 GameProfile NusNzseUsa();
 

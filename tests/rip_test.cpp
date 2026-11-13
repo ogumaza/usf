@@ -5,15 +5,16 @@
 // words that every track shares, and then plays buffers made from those bytes for ever. Its tracks therefore read some
 // words that every track reads and some that only they read.
 //
-// The checks: coverage finds those words; a set trimmed by it puts the whole state and the shared ROM words in the
-// library, and each track's other ROM words and its selector in its mini; each mini, written and loaded back, renders
-// the same samples as the untrimmed state (the anchor: a render of the untrimmed state through the same core but not
-// through the files); a mini that lacks its ROM data renders differently; a track that needs no run doesn't run; a loop
-// watch gives the length analysis its loops, from one jump back a pass or from one for each track of a pass; and
-// StopThread unlinks libultra threads.
+// The checks: coverage finds those words; a set trimmed by it puts the state without the zero words of RDRAM and every
+// ROM word that a track read in the library, and each track's selector in its mini; each mini, written and loaded back,
+// renders the same samples as the untrimmed state (the anchor: a render of the untrimmed state through the same core
+// but not through the files); a mini that lacks its ROM data renders differently; a track that needs no run doesn't
+// run; a loop watch gives the length analysis its loops, from one jump back a pass or from one for each track of a
+// pass; and StopThread unlinks libultra threads.
 
 #include "rip/rip.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -302,23 +303,49 @@ void Coverage(const TrackRuns& tracks)
     XSFLIB_CHECK(tracks.runs[0].reference.size() == 2 && tracks.runs[0].reference != tracks.runs[1].reference);
 }
 
-// The set: the library holds the whole state and the shared ROM word. Each mini holds its track's ROM bytes and its
-// number in a0, the selector at state offset 0x070.
+// The set: the library holds the state without the zero words of RDRAM, and every ROM word that a track read: the three
+// tracks' bytes, which make one chunk, and the shared word. Each mini holds only its number in a0, the selector at
+// state offset 0x070.
 void SetLayout(const TrackRuns& tracks)
 {
     const usf::rip::SetSections set = usf::rip::BuildSet(tracks.snapshot, tracks.profile.tracks, &tracks.words);
 
     XSFLIB_REQUIRE(set.library.rom && set.library.state && set.minis.size() == kTracks);
-    XSFLIB_CHECK(set.library.rom->size() == 1 && set.library.rom->front().offset == kSharedRom);
-    XSFLIB_CHECK(set.library.state->size() == 1);
-    XSFLIB_CHECK(set.library.state->front().offset == 0);
-    XSFLIB_CHECK(set.library.state->front().data == tracks.snapshot.state);
-    XSFLIB_REQUIRE(set.minis[1].rom);
-    XSFLIB_CHECK(set.minis[1].rom->size() == 1);
-    XSFLIB_CHECK(set.minis[1].rom->front().offset == kTrackData + 0x100);
+    XSFLIB_REQUIRE(set.library.rom->size() == 2);
+    XSFLIB_CHECK(set.library.rom->front().offset == kTrackData);
+    XSFLIB_CHECK(set.library.rom->front().data.size() == 0x100 * kTracks);
+    XSFLIB_CHECK(set.library.rom->back().offset == kSharedRom && set.library.rom->back().data.size() == 4);
+    // The state: the header, the runs of RDRAM words that aren't zero, and the RSP memory. Each run starts and ends
+    // with such a word. Written over an image of zeros, as a player loads them, the chunks give the state back.
+    const std::vector<uint8_t>& state = tracks.snapshot.state;
+    const std::vector<usf::Chunk>& chunks = *set.library.state;
+    XSFLIB_REQUIRE(chunks.size() >= 3);
+    XSFLIB_CHECK(chunks.front().offset == 0 && chunks.front().data.size() == kStateRdramOffset);
+    XSFLIB_CHECK(chunks.back().offset == state.size() - 2 * usf::n64::kSpMemSize);
+    XSFLIB_CHECK(chunks.back().data.size() == 2 * usf::n64::kSpMemSize);
+
+    std::vector<uint8_t> loaded(state.size(), 0);
+    size_t chunk_bytes = 0;
+    for (size_t i = 0; i < chunks.size(); i++)
+    {
+        const usf::Chunk& chunk = chunks[i];
+        XSFLIB_REQUIRE(chunk.data.size() >= 4 && chunk.offset + chunk.data.size() <= loaded.size());
+        std::copy(chunk.data.begin(), chunk.data.end(), loaded.begin() + chunk.offset);
+        chunk_bytes += chunk.data.size();
+        if (i != 0 && i + 1 != chunks.size())
+        {
+            XSFLIB_CHECK(xsflib::LoadLe32(chunk.data.data()) != 0);
+            XSFLIB_CHECK(xsflib::LoadLe32(chunk.data.data() + chunk.data.size() - 4) != 0);
+        }
+    }
+
+    XSFLIB_CHECK(loaded == state);
+    XSFLIB_CHECK(chunk_bytes < state.size() / 2);
+
     for (uint32_t track = 0; track < kTracks; track++)
     {
         const usf::Sections& mini = set.minis[track];
+        XSFLIB_CHECK(!mini.rom);
         XSFLIB_REQUIRE(mini.state && mini.state->size() == 1);
         const usf::Chunk& selector = mini.state->front();
         XSFLIB_REQUIRE(selector.data.size() == 8);
@@ -343,15 +370,18 @@ void WrittenFiles(const TrackRuns& tracks)
     const usf::rip::GameProfile& profile = tracks.profile;
     const usf::rip::SetSections set = usf::rip::BuildSet(tracks.snapshot, profile.tracks, &tracks.words);
     XSFLIB_REQUIRE(set.minis.size() == kTracks);
-    // A mini without its ROM data plays the wrong bytes.
-    usf::Sections broken = set.minis[2];
-    broken.rom.reset();
+    // A library without the third track's ROM bytes plays that track wrong.
+    usf::Sections broken_library = set.library;
+    XSFLIB_REQUIRE(broken_library.rom && broken_library.rom->front().data.size() == 0x100 * kTracks);
+    broken_library.rom->front().data.resize(0x100 * (kTracks - 1));
     xsflib::testing::TempFolder folder("usf_rip_test");
     usf::rip::SetTags tags;
     tags.ripper = "usfrip test";
 
     const std::vector<uint8_t> library = usf::rip::LibraryFile(profile, set.library, tags);
     XSFLIB_CHECK(!xsflib::WriteFile(folder.Path() / "Test.usflib", library));
+    XSFLIB_CHECK(!xsflib::WriteFile(folder.Path() / "Broken.usflib",
+                                    usf::rip::LibraryFile(profile, broken_library, tags)));
 
     // The minis, written as usfrip writes them.
     std::vector<MiniJob> jobs;
@@ -360,7 +390,7 @@ void WrittenFiles(const TrackRuns& tracks)
         jobs.push_back({static_cast<uint32_t>(i + 1), profile.tracks[i].name, tracks.runs[i].timing});
     }
 
-    // The broken mini gets the tags of the third track's mini.
+    // The mini of the broken library gets the tags of the third track's mini.
     xsflib::psf::Tags broken_tags;
     const auto build = [&](const MiniJob& job, const xsflib::psf::Tags& mini_tags)
     {
@@ -380,7 +410,8 @@ void WrittenFiles(const TrackRuns& tracks)
 
     const std::filesystem::path broken_path = folder.Path() / "broken.miniusf";
     XSFLIB_CHECK(!xsflib::WriteFile(broken_path,
-                                    usf::rip::MiniFile(profile, broken, 3, "Test.usflib", tags.ripper, broken_tags)));
+                                    usf::rip::MiniFile(profile, set.minis[2], 3, "Broken.usflib", tags.ripper,
+                                                       broken_tags)));
     usf::LoadedUsf loaded;
     const auto load_error = usf::LoadUsf(xsflib::Utf8(paths[1]), xsflib::psf::ReadWholeFile, loaded);
 
