@@ -68,7 +68,7 @@ GameProfile NusNpneUsa()
     profile.serial = "NUS-NPNE-USA";
     profile.sha1 = "8173866fc8c7652abd44c48efcab85441c6806a1";
     profile.year = "2000";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;
 

@@ -9,14 +9,14 @@
 #include <cstdint>
 #include <vector>
 
-#include "n64/mips_registers.h"
+#include "ultralib/machine/mips_registers.h"
 
 namespace usf::rip::mips
 {
 
 // The general-purpose registers by their O32 names. The core uses the same names.
-using Register = n64::mips::Register;
-using enum n64::mips::Register;
+using Register = ultralib::machine::mips::Register;
+using enum ultralib::machine::mips::Register;
 
 inline constexpr uint32_t kNop = 0;
 

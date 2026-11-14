@@ -58,10 +58,8 @@ constexpr uint32_t kFirstMusic = 1;
 // - 0x12 jumps back every 131.80 s from 131.85 s.
 constexpr SongLength kTrackLengths[] = {{0x10, 197.5}, {0x12, 263.6}};
 
-// The titles of the tracks that have a name.
-constexpr NamedNumber kTitles[] = {
-    {0x01, "Sequence 0x01: title screen"},
-};
+// The names of the songs that have one.
+constexpr SongName kSongNames[] = {{0x01, "title screen"}};
 
 } // namespace
 
@@ -72,10 +70,10 @@ GameProfile NusNkteUsa()
     profile.serial = "NUS-NKTE-USA";
     profile.sha1 = "579c48e211ae952530ffc8738709f078d5dd215e";
     profile.year = "1997";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
     profile.controller = true;
-    profile.eeprom = n64::EepromType::k4Kbit;
+    profile.eeprom = ultralib::machine::EepromType::k4Kbit;
 
     // The driver takes over the game thread at the tick's first call. It starts the track's sequence once, then runs
     // the tick every second field, as the game does. Between ticks it waits for two retrace messages, as the game
@@ -100,7 +98,7 @@ GameProfile NusNkteUsa()
 
     for (uint32_t index = kFirstMusic; index < kSequences; index++)
     {
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Sequence", TitleBase::kHex, kTrackLengths));
+        profile.tracks.push_back(NamedOrNumberedTrack(index, kSongNames, "Sequence", TitleBase::kHex, kTrackLengths));
     }
 
     return profile;

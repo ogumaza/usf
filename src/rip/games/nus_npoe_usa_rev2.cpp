@@ -58,7 +58,7 @@ GameProfile NusNpoeUsaRev2()
     profile.serial = "NUS-NPOE-USA-rev2";
     profile.sha1 = "0d3b1d740c6ee6da6923550bf24ad827262fd8c0";
     profile.year = "2000";
-    profile.cic = n64::Cic::k6103;
+    profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;
 

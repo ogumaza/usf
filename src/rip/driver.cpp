@@ -9,8 +9,8 @@
 
 #include "xsflib/text.h"
 
-#include "n64/constants.h"
 #include "rip/mips.h"
+#include "ultralib/machine/constants.h"
 
 namespace usf::rip
 {
@@ -20,7 +20,7 @@ namespace
 using mips::Assembler;
 
 // VI_CURRENT through KSEG1: the half-line that the VI is drawing. It falls back when a new field starts.
-constexpr uint32_t kViBase = n64::kKseg1 + n64::kViRegisters;
+constexpr uint32_t kViBase = ultralib::machine::kKseg1 + ultralib::machine::kViRegisters;
 constexpr uint16_t kViCurrentOffset = 0x10;
 
 // The field wait loads the VI's base with a LUI alone.
@@ -35,7 +35,7 @@ constexpr uint32_t kMesgBlock = 1;
 
 void CheckAddress(uint32_t address, const char* what)
 {
-    if (address < n64::kKseg0 || address >= n64::kKseg1 || (address & 3) != 0)
+    if (address < ultralib::machine::kKseg0 || address >= ultralib::machine::kKseg1 || (address & 3) != 0)
     {
         throw std::invalid_argument(std::string(what) + " must be a word-aligned address in KSEG0");
     }

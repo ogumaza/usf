@@ -21,9 +21,9 @@
 
 #include "xsflib/rip/rom_set.h"
 
-#include "n64/constants.h"
-#include "n64/pif.h"
-#include "n64/system.h"
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/pif.h"
+#include "ultralib/machine/system.h"
 
 namespace usf::rip
 {
@@ -138,9 +138,9 @@ struct GameProfile
     std::string copyright;
 
     // The boot chip, or kUnknown to let the boot find it. A CIC-NUS-6105 game needs a dump of the PIF ROM.
-    n64::Cic cic = n64::Cic::kUnknown;
+    ultralib::machine::Cic cic = ultralib::machine::Cic::kUnknown;
 
-    uint32_t rdram_size = n64::kRdramSize4;
+    uint32_t rdram_size = ultralib::machine::kRdramSize4;
 
     // Changes to the ROM, made before boot.
     std::vector<RomPatch> rom_patches;
@@ -190,8 +190,8 @@ struct GameProfile
     // Input from boot until the snapshot: the script of controller states (pif.h), and the save chip. The ripper
     // connects a controller to each port that an event names, and to port 0 when `controller` is set. Neither reaches
     // the rip: the existing players report every port empty and emulate no save chip.
-    std::vector<n64::InputEvent> input;
-    n64::EepromType eeprom = n64::EepromType::kNone;
+    std::vector<ultralib::machine::InputEvent> input;
+    ultralib::machine::EepromType eeprom = ultralib::machine::EepromType::kNone;
 
     // A game of an arcade board comes as the board's ROM set: chips that the ripper finds by their SHA-1 and size, in a
     // ZIP archive or a folder that the user gives, and puts together into the image. `sha1` is still the image's.
@@ -199,9 +199,9 @@ struct GameProfile
 
     // The board, and its inputs from boot until the snapshot. Like the controllers, they don't reach the rip: the
     // existing players emulate a console, with nothing at the board's addresses.
-    n64::Board board = n64::Board::kConsole;
-    n64::BoardInputs board_inputs;
-    std::vector<n64::BoardInputEvent> board_input;
+    ultralib::machine::Board board = ultralib::machine::Board::kConsole;
+    ultralib::machine::BoardInputs board_inputs;
+    std::vector<ultralib::machine::BoardInputEvent> board_input;
 };
 
 } // namespace usf::rip

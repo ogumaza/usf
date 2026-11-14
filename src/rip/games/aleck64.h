@@ -7,7 +7,7 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
+#include <string_view>
 
 #include "rip/profile.h"
 
@@ -23,8 +23,8 @@ inline constexpr uint32_t kFactorySwitches = 0xFFDFFFFF;
 // A `quiet_tries` large enough to wait for the first quiet arrival, however late it comes.
 inline constexpr int kUntilQuiet = 1000000;
 
-// A profile with the board, its RDRAM, its boot chip and the chips of the set. `chips` gives each chip's SHA-1 and size
-// in the order of the image, with no gaps.
-GameProfile Aleck64Profile(n64::Board board, const std::vector<RomChip>& chips);
+// A profile with the board, its RDRAM, its boot chip, and the game, the image SHA-1 and the chips of the set in
+// ultralib's table whose image has `image_sha1`. Throws std::logic_error if the table has no such set.
+GameProfile Aleck64Profile(ultralib::machine::Board board, std::string_view image_sha1);
 
 } // namespace usf::rip::games

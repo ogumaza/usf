@@ -11,9 +11,9 @@
 #include "xsflib/sha1.h"
 #include "xsflib/text.h"
 
-#include "n64/bits.h"
-#include "n64/constants.h"
-#include "n64/save_state.h"
+#include "ultralib/machine/bits.h"
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/save_state.h"
 
 namespace usf::rip
 {
@@ -30,10 +30,10 @@ constexpr uint16_t kThreadStopped = 1;
 constexpr uint16_t kThreadRunning = 4;
 constexpr int kMaxQueueLength = 4096;
 
-uint32_t ReadWord(n64::System& system, uint32_t vaddr)
+uint32_t ReadWord(ultralib::machine::System& system, uint32_t vaddr)
 {
     std::array<uint8_t, 4> bytes{};
-    if (!system.ReadVirtual(n64::SignExtend32(vaddr), bytes))
+    if (!system.ReadVirtual(ultralib::machine::SignExtend32(vaddr), bytes))
     {
         throw std::runtime_error("the CPU can't read " + xsflib::Hex(vaddr, 8, true));
     }
@@ -41,15 +41,15 @@ uint32_t ReadWord(n64::System& system, uint32_t vaddr)
     return xsflib::LoadBe32(bytes.data());
 }
 
-void WriteBytes(n64::System& system, uint32_t vaddr, std::span<const uint8_t> bytes)
+void WriteBytes(ultralib::machine::System& system, uint32_t vaddr, std::span<const uint8_t> bytes)
 {
-    if (!system.WriteVirtual(n64::SignExtend32(vaddr), bytes))
+    if (!system.WriteVirtual(ultralib::machine::SignExtend32(vaddr), bytes))
     {
         throw std::runtime_error("the CPU can't write " + xsflib::Hex(vaddr, 8, true));
     }
 }
 
-void WriteWords(n64::System& system, uint32_t vaddr, const std::vector<uint32_t>& words)
+void WriteWords(ultralib::machine::System& system, uint32_t vaddr, const std::vector<uint32_t>& words)
 {
     std::vector<uint8_t> bytes(4 * words.size());
     for (size_t i = 0; i < words.size(); i++)
@@ -60,21 +60,21 @@ void WriteWords(n64::System& system, uint32_t vaddr, const std::vector<uint32_t>
     WriteBytes(system, vaddr, bytes);
 }
 
-void WriteWord(n64::System& system, uint32_t vaddr, uint32_t value)
+void WriteWord(ultralib::machine::System& system, uint32_t vaddr, uint32_t value)
 {
     WriteWords(system, vaddr, {value});
 }
 
 // Connects the controllers and the EEPROM that the profile asks for, with its input script.
-void ConnectInput(n64::System& system, const GameProfile& profile)
+void ConnectInput(ultralib::machine::System& system, const GameProfile& profile)
 {
-    n64::Pif& pif = system.GetPif();
+    ultralib::machine::Pif& pif = system.GetPif();
     if (profile.controller)
     {
         pif.ConnectController(0, true);
     }
 
-    for (const n64::InputEvent& event : profile.input)
+    for (const ultralib::machine::InputEvent& event : profile.input)
     {
         pif.ConnectController(event.port, true);
         pif.AddInput(event);
@@ -84,11 +84,11 @@ void ConnectInput(n64::System& system, const GameProfile& profile)
 }
 
 // Runs to the profile's snapshot point and returns at a quiet arrival there.
-void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& snapshot)
+void RunToSnapshot(ultralib::machine::System& system, const GameProfile& profile, Snapshot& snapshot)
 {
     const uint64_t deadline =
         system.Now() + static_cast<uint64_t>(profile.boot_seconds * static_cast<double>(system.TicksPerSecond()));
-    system.AddBreakpoint(n64::SignExtend32(profile.snapshot_address));
+    system.AddBreakpoint(ultralib::machine::SignExtend32(profile.snapshot_address));
 
     int tries = 0;
     while (true)
@@ -141,7 +141,7 @@ void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& sn
             continue;
         }
 
-        const n64::QuietReport quiet = system.CheckQuiet();
+        const ultralib::machine::QuietReport quiet = system.CheckQuiet();
         if (quiet.Quiet())
         {
             break;
@@ -156,7 +156,7 @@ void RunToSnapshot(n64::System& system, const GameProfile& profile, Snapshot& sn
 }
 
 // Where each mini writes its number, as the selector or the driver gives it.
-void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& snapshot)
+void LocateSelector(ultralib::machine::System& system, const GameProfile& profile, Snapshot& snapshot)
 {
     TrackSelector selector = profile.selector;
     if (profile.driver)
@@ -174,7 +174,7 @@ void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& s
             throw std::runtime_error("the selector's register must be r1 to r31");
         }
 
-        snapshot.selector_offset = n64::kStateGprOffset + 8 * static_cast<uint32_t>(selector.reg);
+        snapshot.selector_offset = ultralib::machine::kStateGprOffset + 8 * static_cast<uint32_t>(selector.reg);
         snapshot.selector_size = 8;
         return;
     }
@@ -185,7 +185,7 @@ void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& s
         throw std::runtime_error("the selector's value must be 1, 2 or 4 bytes, aligned to its size");
     }
 
-    const auto paddr = system.GetCpu().TranslateQuiet(n64::SignExtend32(selector.address), true);
+    const auto paddr = system.GetCpu().TranslateQuiet(ultralib::machine::SignExtend32(selector.address), true);
     if (!paddr || *paddr >= system.Rdram().size())
     {
         throw std::runtime_error("the selector " + xsflib::Hex(selector.address, 8, true) + " isn't in RDRAM");
@@ -193,22 +193,22 @@ void LocateSelector(n64::System& system, const GameProfile& profile, Snapshot& s
 
     snapshot.selector_address = *paddr;
     snapshot.selector_value_size = selector.size;
-    snapshot.selector_offset = n64::kStateRdramOffset + (*paddr & ~3u);
+    snapshot.selector_offset = ultralib::machine::kStateRdramOffset + (*paddr & ~3u);
     snapshot.selector_size = 4;
 }
 
 } // namespace
 
 Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std::span<const uint8_t> pif_rom,
-                      n64::Timing timing)
+                      ultralib::machine::Timing timing)
 {
-    n64::Options options;
+    ultralib::machine::Options options;
     options.board = profile.board;
     options.rdram_size = profile.rdram_size;
     options.timing = timing;
-    n64::System system(options);
+    ultralib::machine::System system(options);
     system.SetBoardInputs(profile.board_inputs);
-    for (const n64::BoardInputEvent& event : profile.board_input)
+    for (const ultralib::machine::BoardInputEvent& event : profile.board_input)
     {
         system.AddBoardInput(event);
     }
@@ -236,12 +236,12 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
     ConnectInput(system, profile);
 
     Snapshot snapshot;
-    const n64::BootInfo boot = system.Boot();
+    const ultralib::machine::BootInfo boot = system.Boot();
     if (!boot.booted)
     {
         throw std::runtime_error("the boot failed: " + boot.problem);
     }
-    if (profile.cic != n64::Cic::kUnknown && boot.cic != profile.cic)
+    if (profile.cic != ultralib::machine::Cic::kUnknown && boot.cic != profile.cic)
     {
         throw std::runtime_error("the boot found another boot chip than the profile's");
     }
@@ -261,7 +261,7 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
     if (profile.driver)
     {
         WriteWords(system, profile.driver->address, profile.driver->code);
-        system.GetCpu().SetPc(n64::SignExtend32(profile.driver->address));
+        system.GetCpu().SetPc(ultralib::machine::SignExtend32(profile.driver->address));
     }
 
     LocateSelector(system, profile, snapshot);
@@ -276,7 +276,7 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number)
     std::vector<uint8_t> state = snapshot.state;
     if (snapshot.selector_kind == TrackSelector::Kind::kRegister)
     {
-        xsflib::StoreLe64(state.data() + snapshot.selector_offset, n64::SignExtend32(number));
+        xsflib::StoreLe64(state.data() + snapshot.selector_offset, ultralib::machine::SignExtend32(number));
         return state;
     }
 
@@ -285,7 +285,8 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number)
     for (int i = 0; i < size; i++)
     {
         const uint32_t address = snapshot.selector_address + static_cast<uint32_t>(i);
-        state[n64::kStateRdramOffset + (address ^ 3)] = static_cast<uint8_t>(number >> (8 * (size - 1 - i)));
+        state[ultralib::machine::kStateRdramOffset + (address ^ 3)] =
+            static_cast<uint8_t>(number >> (8 * (size - 1 - i)));
     }
 
     return state;
@@ -295,7 +296,7 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, const Track& track)
 {
     std::vector<uint8_t> state = TrackState(snapshot, track.number);
     // RDRAM ends where DMEM and IMEM start, 8 KiB before the end of the state.
-    const size_t rdram_end = state.size() - 2 * n64::kSpMemSize;
+    const size_t rdram_end = state.size() - 2 * ultralib::machine::kSpMemSize;
     for (const RdramPatch& patch : track.rdram_patches)
     {
         const uint32_t offset = RdramStateOffset(patch.address);
@@ -315,19 +316,19 @@ std::vector<uint8_t> TrackState(const Snapshot& snapshot, const Track& track)
 
 uint32_t RdramStateOffset(uint32_t address)
 {
-    if (address % 4 != 0 || address < n64::kKseg0 || address >= n64::kKseg2)
+    if (address % 4 != 0 || address < ultralib::machine::kKseg0 || address >= ultralib::machine::kKseg2)
     {
         throw std::runtime_error("the patch's address " + xsflib::Hex(address, 8, true) +
                                  " must be word-aligned, in KSEG0 or KSEG1");
     }
 
-    return n64::kStateRdramOffset + (address & n64::kPhysicalAddressMask);
+    return ultralib::machine::kStateRdramOffset + (address & ultralib::machine::kPhysicalAddressMask);
 }
 
-void StopThread(n64::System& system, uint32_t thread)
+void StopThread(ultralib::machine::System& system, uint32_t thread)
 {
     std::array<uint8_t, 2> state_bytes{};
-    if (!system.ReadVirtual(n64::SignExtend32(thread + kThreadState), state_bytes))
+    if (!system.ReadVirtual(ultralib::machine::SignExtend32(thread + kThreadState), state_bytes))
     {
         throw std::runtime_error("the CPU can't read the thread at " + xsflib::Hex(thread, 8, true));
     }

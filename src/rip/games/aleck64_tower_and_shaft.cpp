@@ -56,13 +56,9 @@ constexpr uint32_t kSystemInputs = 0x003D0000;
 
 GameProfile Aleck64TowerAndShaft()
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64,
-                                         {
-                                             {.sha1 = "7dfa3447d2c489c0448c4004dc12d3037c05a0f3", .size = 0x1000000},
-                                         });
-    profile.game = "Tower & Shaft";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "ba4474dc4967adb2a41cf3b0022c6215990c0e64");
     profile.serial = "Aleck64 Tower & Shaft";
-    profile.sha1 = "ba4474dc4967adb2a41cf3b0022c6215990c0e64";
     profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.system = kSystemInputs;

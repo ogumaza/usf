@@ -3,6 +3,7 @@
 #include "rip/games/tracks.h"
 
 #include <cstdio>
+#include <initializer_list>
 #include <utility>
 
 namespace usf::rip::games
@@ -33,18 +34,47 @@ Track NumberedTrack(uint32_t number, std::string name, std::span<const SongLengt
     return track;
 }
 
-Track NamedOrNumberedTrack(uint32_t number, std::span<const NamedNumber> names, std::string_view label, TitleBase base,
-                           std::span<const SongLength> lengths)
+const char* FindSongName(std::span<const SongName> names, uint32_t number)
 {
-    for (const NamedNumber& named : names)
+    for (const SongName& song : names)
     {
-        if (named.number == number)
+        if (song.index == number)
         {
-            return NumberedTrack(number, named.name, lengths);
+            return song.name;
         }
     }
 
-    return NumberedTrack(number, NumberTitle(label, number, base), lengths);
+    return nullptr;
+}
+
+const char* FindSongName(std::span<const SongName> set_names, std::span<const SongName> names, uint32_t number)
+{
+    const char* name = FindSongName(set_names, number);
+
+    return name != nullptr ? name : FindSongName(names, number);
+}
+
+std::string SongTitle(std::string_view label, uint32_t number, TitleBase base, const char* name, const char* detail)
+{
+    std::string title = NumberTitle(label, number, base);
+    const char* separator = ": ";
+    for (const char* part : {name, detail})
+    {
+        if (part != nullptr)
+        {
+            title += separator;
+            title += part;
+            separator = ", ";
+        }
+    }
+
+    return title;
+}
+
+Track NamedOrNumberedTrack(uint32_t number, std::span<const SongName> names, std::string_view label, TitleBase base,
+                           std::span<const SongLength> lengths)
+{
+    return NumberedTrack(number, SongTitle(label, number, base, FindSongName(names, number)), lengths);
 }
 
 } // namespace usf::rip::games

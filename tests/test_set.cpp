@@ -6,11 +6,11 @@
 
 #include "xsflib/bytes.h"
 
-#include "n64/save_state.h"
-#include "n64/system.h"
 #include "rip/mips.h"
 #include "test_mips.h"
-#include "test_programs.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "usf/usf_file.h"
 
 namespace usf::testing
@@ -36,9 +36,9 @@ using mips::kT7;
 using mips::kT8;
 using mips::kT9;
 using mips::kZero;
-using usf::n64::kCop0Epc;
-using usf::n64::kCop0Status;
-using usf::n64::kKseg0;
+using ultralib::machine::kCop0Epc;
+using ultralib::machine::kCop0Status;
+using ultralib::machine::kKseg0;
 
 constexpr uint32_t kExceptionVector = 0x00000180;
 constexpr uint32_t kParameters = 0x00100000;
@@ -103,18 +103,18 @@ uint32_t MulS(uint32_t fd, uint32_t fs, uint32_t ft)
 std::vector<uint32_t> MakeRspProgram()
 {
     return {
-        0x8C010000,                 // lw r1, 0(r0)
-        RspLqv(1, 1),               // loop: lqv $v1[0], 16(r0)
-        RspLqv(2, 2),               // lqv $v2[0], 32(r0)
-        RspVector(kVmulf, 3, 1, 2), // vmulf $v3, $v1, $v2
-        RspVector(kVmacf, 4, 1, 2), // vmacf $v4, $v1, $v2
-        RspVector(kVmudh, 5, 3, 4), // vmudh $v5, $v3, $v4
-        RspVector(kVadd, 6, 5, 1),  // vadd $v6, $v5, $v1
-        RspSqv(6, 3),               // sqv $v6[0], 48(r0)
-        0x2021FFFF,                 // addi r1, r1, -1
-        0x1C20FFF7,                 // bgtz r1, loop
-        0x00000000,                 // nop
-        0x0000000D,                 // break
+        0x8C010000,                                                       // lw r1, 0(r0)
+        ultralib::testing::RspLqv(1, 1),                                  // loop: lqv $v1[0], 16(r0)
+        ultralib::testing::RspLqv(2, 2),                                  // lqv $v2[0], 32(r0)
+        ultralib::testing::RspVector(ultralib::testing::kVmulf, 3, 1, 2), // vmulf $v3, $v1, $v2
+        ultralib::testing::RspVector(ultralib::testing::kVmacf, 4, 1, 2), // vmacf $v4, $v1, $v2
+        ultralib::testing::RspVector(ultralib::testing::kVmudh, 5, 3, 4), // vmudh $v5, $v3, $v4
+        ultralib::testing::RspVector(ultralib::testing::kVadd, 6, 5, 1),  // vadd $v6, $v5, $v1
+        ultralib::testing::RspSqv(6, 3),                                  // sqv $v6[0], 48(r0)
+        0x2021FFFF,                                                       // addi r1, r1, -1
+        0x1C20FFF7,                                                       // bgtz r1, loop
+        0x00000000,                                                       // nop
+        0x0000000D,                                                       // break
     };
 }
 
@@ -284,7 +284,7 @@ void EmitIdle(mips::Assembler& code, uint32_t loop)
 // parameters, s4 the SP's registers and s5 the buffer in use. The handler overwrites only t8 and t9.
 std::vector<uint32_t> MakeCpuProgram()
 {
-    mips::Assembler code(kKseg0 | kCode);
+    mips::Assembler code(kKseg0 | ultralib::testing::kCode);
     EmitSetUp(code);
 
     const uint32_t loop = code.Here();
@@ -302,11 +302,11 @@ std::vector<uint32_t> MakeCpuProgram()
 // The state: the programs in memory, and the CPU about to start. The ROM's bytes in LE word order are the file's.
 std::vector<uint8_t> MakeState()
 {
-    usf::n64::System system(LegacyOptions());
-    system.LoadRom(TestRom(kRomSize));
-    WriteProgram(system, kExceptionVector, MakeExceptionHandler());
-    StartProgram(system, MakeCpuProgram(), kStatusAsleep);
-    WriteProgram(system, usf::n64::kSpImem, MakeRspProgram());
+    ultralib::machine::System system(ultralib::testing::LegacyOptions());
+    system.LoadRom(ultralib::testing::TestRom(kRomSize));
+    ultralib::testing::WriteProgram(system, kExceptionVector, MakeExceptionHandler());
+    ultralib::testing::StartProgram(system, MakeCpuProgram(), kStatusAsleep);
+    ultralib::testing::WriteProgram(system, ultralib::machine::kSpImem, MakeRspProgram());
 
     return system.SaveState();
 }
@@ -331,9 +331,9 @@ int16_t TestRight(const TestTrack& track, uint64_t frame)
 std::vector<uint8_t> MakeTestLibrary(const xsflib::psf::Tags& tags)
 {
     // The ROM section is in LE word order: console byte A is at A XOR 3.
-    const std::vector<uint8_t> rom = TestRom(kRomSize);
+    const std::vector<uint8_t> rom = ultralib::testing::TestRom(kRomSize);
     std::vector<uint8_t> words(rom.size());
-    usf::n64::CopyToLeWords(rom.data(), words.data(), rom.size());
+    ultralib::machine::CopyToLeWords(rom.data(), words.data(), rom.size());
 
     usf::Sections sections;
     sections.rom = std::vector<usf::Chunk>{{0, words}};
@@ -354,7 +354,7 @@ std::vector<uint8_t> MakeTestMini(const TestTrack& track, const xsflib::psf::Tag
     }
 
     usf::Sections sections;
-    sections.state = std::vector<usf::Chunk>{{usf::n64::kStateRdramOffset + kParameters, block}};
+    sections.state = std::vector<usf::Chunk>{{ultralib::machine::kStateRdramOffset + kParameters, block}};
 
     return usf::WriteUsf(sections, tags);
 }

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(usf VERSION 1.2.0 LANGUAGES C CXX)
+project(usf VERSION 1.2.1 LANGUAGES C CXX)
 
 # xsflib is a library for players and rippers of the PSF family. It's a submodule. Its XsflibProject.cmake sets what a
 # project built on it starts with: C++20, a release build by default, the static C runtime, the options that keep the
@@ -31,47 +31,23 @@ set(XSFLIB_PSF ON)
 set(XSFLIB_CLI ON)
 xsflib_add_libraries(xsflib)
 
-# The emulator core: the VR4300, the RSP, the RCP's interfaces, the PIF, boot, save states and coverage.
-add_library(usf_n64 STATIC
-    src/n64/aleck64.cpp
-    src/n64/bits.h
-    src/n64/boot.cpp
-    src/n64/constants.h
-    src/n64/coverage.cpp
-    src/n64/coverage.h
-    src/n64/cpu.cpp
-    src/n64/cpu.h
-    src/n64/cpu_cop0.cpp
-    src/n64/cpu_cop0.h
-    src/n64/cpu_fast.cpp
-    src/n64/cpu_fpu.cpp
-    src/n64/mips_registers.h
-    src/n64/pif.cpp
-    src/n64/pif.h
-    src/n64/rcp.cpp
-    src/n64/rdram.cpp
-    src/n64/rsp.cpp
-    src/n64/rsp.h
-    src/n64/rsp_vector.cpp
-    src/n64/rsp_vector.h
-    src/n64/save_state.cpp
-    src/n64/save_state.h
-    src/n64/system.cpp
-    src/n64/system.h
-    src/n64/word_set.cpp
-    src/n64/word_set.h
-)
-target_include_directories(usf_n64 PUBLIC src)
-target_link_libraries(usf_n64 PUBLIC xsflib::common)
-target_compile_options(usf_n64 PRIVATE ${USF_WARNINGS})
+option(USF_TESTS "Build usf's tests and register them with CTest." ON)
 
-# The FPU's arithmetic runs on the host's floating point in the rounding mode that the emulated FCR31 selects, and
-# reads the host's exception flags. The compiler must keep each operation between the calls that set the mode and
-# read the flags.
-if (MSVC)
-    set_source_files_properties(src/n64/cpu_fpu.cpp PROPERTIES COMPILE_OPTIONS "/clang:-ffp-model=strict")
+# The emulator core: the VR4300, the RSP, the RCP's interfaces, the PIF, boot, save states and coverage. ultralib is a
+# submodule. Its core (ultralib::machine) requires only xsflib. The sound modules, which require ntdlib, stay off. The
+# ripper takes the Aleck64 sets from ultralib::rom_set and the song names from ultralib/n64/song_names.h, a header
+# that requires only the standard library. With USF_TESTS, the core's unit tests build and run with usf's, on each
+# platform that usf builds for.
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ultralib/CMakeLists.txt")
+    message(FATAL_ERROR "externals/ultralib is missing. Clone with git clone --recursive, or run "
+                        "git submodule update --init --recursive in a clone.")
+endif()
+set(ULTRALIB_SOUND OFF)
+set(ULTRALIB_TESTS ${USF_TESTS})
+if (USF_TESTS)
+    add_subdirectory(externals/ultralib)
 else()
-    set_source_files_properties(src/n64/cpu_fpu.cpp PROPERTIES COMPILE_OPTIONS "-ffp-model=strict")
+    add_subdirectory(externals/ultralib EXCLUDE_FROM_ALL)
 endif()
 
 # The USF format: its files, the loading of a track with its libraries, and the start of a track on the core.
@@ -84,7 +60,7 @@ add_library(usf_format STATIC
     src/usf/usf_file.h
 )
 target_include_directories(usf_format PUBLIC src)
-target_link_libraries(usf_format PUBLIC usf_n64 xsflib::psf_container)
+target_link_libraries(usf_format PUBLIC ultralib::machine xsflib::psf_container)
 target_compile_options(usf_format PRIVATE ${USF_WARNINGS})
 
 # The writer of USF files, on xsflib's PSF writer. That writer requires zlib. usf_format and n64run leave it out.
@@ -143,14 +119,12 @@ add_library(usf_rip STATIC
     src/rip/profiles.h
     src/rip/rip.cpp
     src/rip/rip.h
-    src/rip/rom_set.cpp
-    src/rip/rom_set.h
     src/rip/snapshot.cpp
     src/rip/snapshot.h
     src/rip/trim.cpp
     src/rip/trim.h
 )
-target_link_libraries(usf_rip PUBLIC usf_write xsflib::rip xsflib::rom_set)
+target_link_libraries(usf_rip PUBLIC usf_write xsflib::rip xsflib::rom_set ultralib::rom_set)
 target_compile_options(usf_rip PRIVATE ${USF_WARNINGS})
 
 # The player of the front ends: one rate for each track, on xsflib's playback framework.
@@ -200,24 +174,15 @@ if (XMPLAY_SDK_DIR AND WIN32)
     add_subdirectory(plugins/xmplay)
 endif()
 
-option(USF_TESTS "Build usf's tests and register them with CTest." ON)
 if (USF_TESTS)
     enable_testing()
 
     # The unit tests: usf_<name>_test from tests/<name>_test.cpp, registered as usf_<name>.
-    xsflib_add_project_test(usf save_state usf_n64)
-    xsflib_add_project_test(usf cpu usf_n64)
-    xsflib_add_project_test(usf legacy_timing usf_n64)
     xsflib_add_project_test(usf fast_path usf_rip)
-    xsflib_add_project_test(usf rsp_vector usf_n64)
-    xsflib_add_project_test(usf fpu usf_n64)
     xsflib_add_project_test(usf usf_file usf_write)
     xsflib_add_project_test(usf mips usf_rip)
     xsflib_add_project_test(usf rip usf_rip)
     xsflib_add_project_test(usf player usf_rip)
-    xsflib_add_project_test(usf pif usf_n64)
-    xsflib_add_project_test(usf aleck64 usf_n64)
-    xsflib_add_project_test(usf rom_set usf_rip)
 
     # On Windows, UTF-8 is the code page of the tests that open files by a narrow path, and of the programs that take
     # paths on the command line. A temporary or build folder can then have a name outside ASCII.
@@ -250,17 +215,6 @@ if (USF_TESTS)
 
     # usfplay reports the version it was built as.
     xsflib_add_version_test(usfplay VERSION ${usf_VERSION})
-
-    # The test ROMs aren't in the repo. USF_TEST_ROMS names a folder that holds them: n64-systemtest.z64 from
-    # n64-systemtest, and PeterLemon's N64 tests in their repository's layout under PeterLemon/.
-    set(USF_TEST_ROMS "" CACHE PATH "Folder of the test ROMs (n64-systemtest and PeterLemon's N64 tests)")
-    add_executable(usf_test_rom tests/test_rom.cpp)
-    target_link_libraries(usf_test_rom PRIVATE usf_n64)
-    target_compile_options(usf_test_rom PRIVATE ${USF_WARNINGS})
-    xsflib_add_utf8_manifest(usf_test_rom)
-    if (USF_TEST_ROMS)
-        include(tests/test_roms.cmake)
-    endif()
 
     # Load local_tests.cmake from each immediate subdirectory to register tests that use locally supplied files.
     xsflib_include_local_tests()

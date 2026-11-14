@@ -1,3 +1,6 @@
 [submodule "externals/xsflib"]
 	path = externals/xsflib
 	url = ../xsflib.git
+[submodule "externals/ultralib"]
+	path = externals/ultralib
+	url = ../ultralib.git

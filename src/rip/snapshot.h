@@ -9,8 +9,8 @@
 #include <span>
 #include <vector>
 
-#include "n64/system.h"
 #include "rip/profile.h"
+#include "ultralib/machine/system.h"
 
 namespace usf::rip
 {
@@ -42,7 +42,7 @@ struct Snapshot
 // be the one the rips play with: the legacy players'. Throws std::runtime_error with the reason when the image isn't
 // the profile's, the boot fails, the snapshot point isn't reached, or no arrival there is quiet.
 Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std::span<const uint8_t> pif_rom,
-                      n64::Timing timing = n64::Timing::kLegacy);
+                      ultralib::machine::Timing timing = ultralib::machine::Timing::kLegacy);
 
 // The state image of the track with the number `number`: the snapshot's, with the number in the selector.
 std::vector<uint8_t> TrackState(const Snapshot& snapshot, uint32_t number);
@@ -56,6 +56,6 @@ uint32_t RdramStateOffset(uint32_t address);
 
 // Stops the libultra thread whose OSThread structure is at `thread`, as osStopThread does: takes it off the queue it
 // waits in and marks it stopped. Throws std::runtime_error for the running thread or an address the CPU can't reach.
-void StopThread(n64::System& system, uint32_t thread);
+void StopThread(ultralib::machine::System& system, uint32_t thread);
 
 } // namespace usf::rip

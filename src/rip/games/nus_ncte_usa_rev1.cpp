@@ -47,11 +47,6 @@ constexpr uint32_t kDriverAddress = 0x803FF000;
 
 constexpr uint32_t kSequences = 29;
 
-// The titles of the tracks that have a name.
-constexpr NamedNumber kTitles[] = {
-    {0x19, "Sequence 0x19: title screen"},
-};
-
 } // namespace
 
 GameProfile NusNcteUsaRev1()
@@ -61,7 +56,7 @@ GameProfile NusNcteUsaRev1()
     profile.serial = "NUS-NCTE-USA-rev1";
     profile.sha1 = "4ca6d563131b4809fe1748335182816a024999d4";
     profile.year = "1997";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
@@ -85,7 +80,8 @@ GameProfile NusNcteUsaRev1()
 
     for (uint32_t index = 0; index < kSequences; index++)
     {
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Sequence", TitleBase::kHex));
+        profile.tracks.push_back(
+            NamedOrNumberedTrack(index, ultralib::n64::kChameleonTwistSongNames, "Sequence", TitleBase::kHex));
     }
 
     return profile;

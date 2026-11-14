@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <span>
 
-#include "n64/system.h"
+#include "ultralib/machine/system.h"
 #include "usf/usf_file.h"
 
 namespace usf
@@ -17,11 +17,11 @@ namespace usf
 // only with `_enablecompare`, the AI's delay only with `_enableFIFOfull`, the delays of the PI, the SI and the DP only
 // with both, an FPU that raises no exception, and the legacy players' timing of events. `state` must be a state image
 // that LoadUsf accepted.
-n64::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, bool enable_fifo_full);
-n64::Options TrackOptions(const LoadedUsf& track);
+ultralib::machine::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, bool enable_fifo_full);
+ultralib::machine::Options TrackOptions(const LoadedUsf& track);
 
 // Loads `rom` (console byte order) and then `state` into `system`, which TrackOptions made.
-void StartTrack(n64::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state);
+void StartTrack(ultralib::machine::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state);
 
 // Keeps a track's output in time with the emulated time. The output is the concatenation of the game's buffers. A game
 // that stops sending them for longer than kStallSeconds gets silence for the time that it stopped, so that time goes on

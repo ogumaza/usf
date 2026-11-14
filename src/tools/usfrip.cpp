@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "xsflib/cli/parallel.h"
@@ -28,13 +29,13 @@
 #include "xsflib/rip/tool.h"
 #include "xsflib/sha1.h"
 
-#include "n64/constants.h"
-#include "n64/system.h"
 #include "rip/profiles.h"
 #include "rip/rip.h"
-#include "rip/rom_set.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/rom_set.h"
+#include "ultralib/machine/system.h"
 
 namespace
 {
@@ -44,9 +45,6 @@ namespace fs = std::filesystem;
 using usf::rip::GameProfile;
 using usf::rip::Track;
 using usf::rip::TrackRun;
-
-// The extensions of a cartridge image's file, one for each of its three byte orders.
-constexpr std::string_view kImageExtensions[] = {".z64", ".v64", ".n64"};
 
 constexpr char kUsage[] =
     "usage: usfrip [options] <image> [<image> ...]\n"
@@ -138,7 +136,7 @@ int BeforeInputs(std::vector<std::string>&, Options& o)
 // The image's SHA-1 in big-endian byte order, which the profiles name.
 std::string ImageSha1(std::vector<uint8_t> rom)
 {
-    usf::n64::ToConsoleOrder(rom);
+    ultralib::machine::ToConsoleOrder(rom);
     return xsflib::Sha1::Hex(xsflib::Sha1::Of(rom));
 }
 
@@ -185,10 +183,10 @@ void WarnAboutRuns(const std::vector<Job>& jobs, const Options& o)
 
         // libultra keeps osTvType at 0x300. One legacy player writes 0 there at the start of a track. libultra reads 0
         // as PAL.
-        if (o.trim && job.run.words.rdram.Has(usf::n64::kOsTvTypeAddress / 4))
+        if (o.trim && job.run.words.rdram.Has(ultralib::machine::kOsTvTypeAddress / 4))
         {
             std::fprintf(stderr, "warning: %s reads osTvType (RDRAM 0x%X). A legacy player may play it as PAL.\n",
-                         job.label.c_str(), usf::n64::kOsTvTypeAddress);
+                         job.label.c_str(), ultralib::machine::kOsTvTypeAddress);
         }
 
         // A board's game may still use the board after the snapshot. The players have nothing there, so the track can
@@ -336,54 +334,54 @@ int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job
     return result;
 }
 
+// The Aleck64 sets of the profiles, in the order of Profiles(). The first game whose chips are all in a set wins. The
+// sets point into the profiles, which last as long as the program.
+std::vector<ultralib::machine::Aleck64Set> ProfileSets()
+{
+    std::vector<ultralib::machine::Aleck64Set> sets;
+    for (const GameProfile& profile : usf::rip::Profiles())
+    {
+        if (!profile.chips.empty())
+        {
+            sets.push_back({profile.game, profile.sha1, profile.chips});
+        }
+    }
+
+    return sets;
+}
+
 // Puts together the image of the first game whose chips are all in the ROM set at `path`. A ZIP archive may contain one
 // cartridge image instead. Returns false after printing why there's no image.
 bool ReadSetImage(const std::string& input, const fs::path& path, std::vector<uint8_t>& rom)
 {
-    std::vector<usf::rip::SetFile> files;
-    if (auto problem = usf::rip::ReadRomSet(path, usf::rip::Profiles(), files))
+    static const std::vector<ultralib::machine::Aleck64Set> kSets = ProfileSets();
+    ultralib::machine::Aleck64SetImage image = ultralib::machine::ReadAleck64Set(path, "usfrip", kSets);
+    if (image.unreadable)
     {
-        std::fprintf(stderr, "error: %s\n", problem->c_str());
+        std::fprintf(stderr, "error: %s\n", image.problem.c_str());
         return false;
     }
-
-    // A ZIP archive may hold a cartridge image instead, as images are often given. A set with some of a game's chips
-    // keeps its message about the missing ones, unless it holds an image too.
-    usf::rip::RomSetImage image = usf::rip::BuildRomSetImage(usf::rip::Profiles(), files);
-    std::error_code error;
-    usf::rip::SetFile* cartridge = nullptr;
-    if (image.profile == nullptr && !fs::is_directory(path, error))
-    {
-        cartridge = xsflib::rip::OnlyFileWithExtension(files, kImageExtensions);
-    }
-
-    if (image.profile != nullptr)
-    {
-        rom = std::move(image.rom);
-
-        if (!image.others.empty())
-        {
-            std::string other_games;
-            for (const GameProfile* other : image.others)
-            {
-                other_games += (other_games.empty() ? "" : ", ") + other->game;
-            }
-
-            std::fprintf(stderr,
-                         "warning: %s contains the chips of more than one game. Only %s is ripped. Not ripped: %s. "
-                         "Put each game in a folder or an archive of its own.\n",
-                         input.c_str(), image.profile->game.c_str(), other_games.c_str());
-        }
-    }
-    else if (cartridge != nullptr)
-    {
-        rom = std::move(cartridge->data);
-    }
-    else
+    if (!image.problem.empty())
     {
         std::fprintf(stderr, "error: %s: %s\n", input.c_str(), image.problem.c_str());
         return false;
     }
+
+    if (image.game && !image.others.empty())
+    {
+        std::string other_games;
+        for (const size_t other : image.others)
+        {
+            other_games += (other_games.empty() ? "" : ", ") + std::string(kSets[other].name);
+        }
+
+        std::fprintf(stderr,
+                     "warning: %s contains the chips of more than one game. Only %s is ripped. Not ripped: %s. "
+                     "Put each game in a folder or an archive of its own.\n",
+                     input.c_str(), std::string(kSets[*image.game].name).c_str(), other_games.c_str());
+    }
+
+    rom = std::move(image.image);
 
     return true;
 }
@@ -392,7 +390,7 @@ bool ReadSetImage(const std::string& input, const fs::path& path, std::vector<ui
 // Returns false after printing why it can't.
 bool ReadImage(const std::string& input, const fs::path& path, std::vector<uint8_t>& rom)
 {
-    if (usf::rip::IsRomSet(path))
+    if (xsflib::rip::IsRomSet(path))
     {
         return ReadSetImage(input, path, rom);
     }

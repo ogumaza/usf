@@ -45,41 +45,6 @@ constexpr SongLength kSongLengths[] = {
     {0x1C, 19.1},  {0x1D, 142.3}, {0x1E, 116.1}, {0x22, 132.0},
 };
 
-// The titles of the tracks that have a name.
-constexpr NamedNumber kTitles[] = {
-    {0x00, "Song 0x00: Beach"},
-    {0x01, "Song 0x01: Poké Flute, first song"},
-    {0x02, "Song 0x02: Poké Flute, third song"},
-    {0x03, "Song 0x03: Poké Flute, second song"},
-    {0x04, "Song 0x04: Tunnel"},
-    {0x05, "Song 0x05: River"},
-    {0x06, "Song 0x06: Volcano"},
-    {0x07, "Song 0x07: Valley"},
-    {0x0B, "Song 0x0B: staff roll"},
-    {0x0C, "Song 0x0C: new game"},
-    {0x0D, "Song 0x0D: Cave"},
-    {0x0E, "Song 0x0E: Rainbow Cloud"},
-    {0x0F, "Song 0x0F: Cave, ambience"},
-    {0x10, "Song 0x10: photo check"},
-    {0x11, "Song 0x11: course finished"},
-    {0x12, "Song 0x12: Professor Oak's report, part 1"},
-    {0x14, "Song 0x14: River and title screen, ambience"},
-    {0x15, "Song 0x15: River, ambience"},
-    {0x17, "Song 0x17: main menu"},
-    {0x18, "Song 0x18: Cave, second ambience"},
-    {0x19, "Song 0x19: title screen"},
-    {0x1B, "Song 0x1B: menu"},
-    {0x1C, "Song 0x1C: Mew"},
-    {0x1D, "Song 0x1D: Professor Oak's report, part 2"},
-    {0x1E, "Song 0x1E: Professor Oak's report, part 3"},
-    {0x1F, "Song 0x1F: photo check, ambience"},
-    {0x20, "Song 0x20: Valley and Professor Oak's lab, ambience"},
-    {0x21, "Song 0x21: Tunnel, ambience"},
-    {0x22, "Song 0x22: gallery"},
-    {0x23, "Song 0x23: main menu, ambience"},
-    {0x24, "Song 0x24: staff roll, second part"},
-};
-
 } // namespace
 
 GameProfile NusNpfeUsa()
@@ -89,7 +54,7 @@ GameProfile NusNpfeUsa()
     profile.serial = "NUS-NPFE-USA";
     profile.sha1 = "edc7c49cc568c045fe48be0d18011c30f393cbaf";
     profile.year = "1999";
-    profile.cic = n64::Cic::k6103;
+    profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
@@ -114,7 +79,8 @@ GameProfile NusNpfeUsa()
             continue;
         }
 
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Song", TitleBase::kHex, kSongLengths));
+        profile.tracks.push_back(
+            NamedOrNumberedTrack(index, ultralib::n64::kPokemonSnapSongNames, "Song", TitleBase::kHex, kSongLengths));
     }
 
     return profile;

@@ -15,8 +15,8 @@
 
 #include "xsflib/psf/psf.h"
 
-#include "n64/constants.h"
-#include "n64/save_state.h"
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/save_state.h"
 
 namespace usf
 {
@@ -25,11 +25,11 @@ inline constexpr uint8_t kUsfVersion = 0x21;
 
 // The state image is this much larger than the RDRAM that it holds: the header comes before the RDRAM, and DMEM and
 // IMEM come after it.
-inline constexpr uint32_t kStateOverhead = n64::kStateOverhead;
+inline constexpr uint32_t kStateOverhead = ultralib::machine::kStateOverhead;
 
 // The cartridge offsets that a ROM chunk may cover: cartridge space runs from 0x10000000 up to the PIF's ROM at
 // 0x1FC00000.
-inline constexpr uint32_t kMaxRomOffset = n64::kPifRom - n64::kCartRom;
+inline constexpr uint32_t kMaxRomOffset = ultralib::machine::kPifRom - ultralib::machine::kCartRom;
 
 // One chunk of a section: data for the image at `offset`. In the ROM section, offsets are cartridge offsets and the
 // data are in LE word order. In the state section, offsets and data are those of the state image.

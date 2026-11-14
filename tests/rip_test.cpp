@@ -30,14 +30,14 @@
 #include "xsflib/testing/check.h"
 #include "xsflib/testing/temp_folder.h"
 
-#include "n64/save_state.h"
-#include "n64/system.h"
 #include "rip/mips.h"
 #include "rip/profiles.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
 #include "test_mips.h"
-#include "test_programs.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "usf/usf_file.h"
 
 namespace
@@ -60,10 +60,10 @@ using mips::kT7;
 using mips::kT8;
 using mips::kT9;
 using mips::kZero;
-using usf::n64::kKseg0;
-using usf::n64::kStateRdramOffset;
-using usf::testing::kCode;
-using usf::testing::kStateA0;
+using ultralib::machine::kKseg0;
+using ultralib::machine::kStateRdramOffset;
+using ultralib::testing::kCode;
+using ultralib::testing::kStateA0;
 
 // The program's memory, by physical address.
 constexpr uint32_t kSequence = 0x00100000; // Where the track's ROM bytes go.
@@ -207,7 +207,7 @@ Program MakeProgram(int loop_tracks = 0, bool track_addresses = false)
 
 std::vector<uint8_t> MakeRom()
 {
-    std::vector<uint8_t> rom = usf::testing::TestRom(0x8000);
+    std::vector<uint8_t> rom = ultralib::testing::TestRom(0x8000);
     for (uint32_t i = 0; i < kTracks * 0x100; i++)
     {
         rom[kTrackData + i] = static_cast<uint8_t>((i * 37 + i / 0x100 * 101) & 0xFF);
@@ -221,9 +221,9 @@ std::vector<uint8_t> MakeRom()
 // The snapshot: the program about to start, with its track number in a0.
 usf::rip::Snapshot MakeSnapshot(const Program& program)
 {
-    usf::n64::System system(usf::testing::LegacyOptions());
+    ultralib::machine::System system(ultralib::testing::LegacyOptions());
     system.LoadRom(MakeRom());
-    usf::testing::StartProgram(system, program.words, 0);
+    ultralib::testing::StartProgram(system, program.words, 0);
     for (uint32_t track = 0; track < kTracks; track++)
     {
         system.WritePhysical32(kGains + 4 * track, 3 + 2 * track);
@@ -321,8 +321,8 @@ void SetLayout(const TrackRuns& tracks)
     const std::vector<usf::Chunk>& chunks = *set.library.state;
     XSFLIB_REQUIRE(chunks.size() >= 3);
     XSFLIB_CHECK(chunks.front().offset == 0 && chunks.front().data.size() == kStateRdramOffset);
-    XSFLIB_CHECK(chunks.back().offset == state.size() - 2 * usf::n64::kSpMemSize);
-    XSFLIB_CHECK(chunks.back().data.size() == 2 * usf::n64::kSpMemSize);
+    XSFLIB_CHECK(chunks.back().offset == state.size() - 2 * ultralib::machine::kSpMemSize);
+    XSFLIB_CHECK(chunks.back().data.size() == 2 * ultralib::machine::kSpMemSize);
 
     std::vector<uint8_t> loaded(state.size(), 0);
     size_t chunk_bytes = 0;
@@ -434,7 +434,7 @@ void WrittenFiles(const TrackRuns& tracks)
 void NoRun()
 {
     usf::rip::Snapshot snapshot;
-    snapshot.state.assign(usf::kStateOverhead + usf::n64::kRdramSize4, 0);
+    snapshot.state.assign(usf::kStateOverhead + ultralib::machine::kRdramSize4, 0);
     snapshot.selector_offset = kStateA0;
     snapshot.selector_size = 8;
     const usf::rip::GameProfile profile = MakeProfile();
@@ -505,9 +505,9 @@ constexpr uint32_t kQueueTail = 0x00190400;
 
 // libultra's OSThread: next at 0x00, priority at 0x04, queue at 0x08, state (16 bits) at 0x10. A queue ends at a thread
 // of priority -1.
-void WriteThreadQueue(usf::n64::System& system)
+void WriteThreadQueue(ultralib::machine::System& system)
 {
-    system.GetCpu().SetCop0(usf::n64::kCop0Status, 0);
+    system.GetCpu().SetCop0(ultralib::machine::kCop0Status, 0);
     system.WritePhysical32(kThreadQueue, kKseg0 | kThreads[0]);
     for (int i = 0; i < 3; i++)
     {
@@ -521,7 +521,7 @@ void WriteThreadQueue(usf::n64::System& system)
 
 void StopThreads()
 {
-    usf::n64::System system;
+    ultralib::machine::System system;
     WriteThreadQueue(system);
 
     usf::rip::StopThread(system, kKseg0 | kThreads[1]);
@@ -537,7 +537,7 @@ void StopThreads()
 // A running thread can't be stopped.
 void RunningThread()
 {
-    usf::n64::System system;
+    ultralib::machine::System system;
     WriteThreadQueue(system);
     system.WritePhysical32(kThreads[2] + 0x10, 0x00040000); // Running.
     const auto stop = [&system]
@@ -555,7 +555,7 @@ void RunningThread()
 usf::rip::Snapshot RdramSelectorSnapshot(uint32_t address, uint32_t value_size)
 {
     usf::rip::Snapshot snapshot;
-    snapshot.state.assign(usf::kStateOverhead + usf::n64::kRdramSize4, 0);
+    snapshot.state.assign(usf::kStateOverhead + ultralib::machine::kRdramSize4, 0);
     snapshot.selector_kind = usf::rip::TrackSelector::Kind::kRdram;
     snapshot.selector_address = address;
     snapshot.selector_value_size = value_size;

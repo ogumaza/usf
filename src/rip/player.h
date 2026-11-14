@@ -12,8 +12,8 @@
 
 #include "xsflib/sha256.h"
 
-#include "n64/system.h"
 #include "rip/profile.h"
+#include "ultralib/machine/system.h"
 #include "usf/track.h"
 
 namespace usf::rip
@@ -60,7 +60,7 @@ public:
     // Takes the loops seen before output frame `frame`.
     std::vector<LoopEvent> TakeLoops(uint64_t frame);
 
-    n64::System& System();
+    ultralib::machine::System& System();
 
 private:
     struct Frame
@@ -76,7 +76,7 @@ private:
     void RunSlice();
     void Queue(std::span<const int16_t> samples, uint32_t rate);
 
-    n64::System system_;
+    ultralib::machine::System system_;
     std::vector<LoopWatch> loop_watches_;
 
     // Frames waiting to be rendered, each with its rate.

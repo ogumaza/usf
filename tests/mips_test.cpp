@@ -13,16 +13,16 @@
 
 #include "xsflib/testing/check.h"
 
-#include "n64/system.h"
 #include "rip/driver.h"
-#include "test_programs.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 
 namespace
 {
 
 namespace mips = usf::rip::mips;
 
-using usf::n64::kKseg0;
+using ultralib::machine::kKseg0;
 
 void Encodings()
 {
@@ -76,38 +76,39 @@ uint32_t Counter(uint32_t n)
     return kKseg0 | (kCounters + 0x20 * n);
 }
 
-uint32_t CounterValue(usf::n64::System& system, uint32_t n)
+uint32_t CounterValue(ultralib::machine::System& system, uint32_t n)
 {
     return system.ReadPhysical32(kResults + 0x10 + 4 * n);
 }
 
 // Runs the driver for `track` for half a second on the core with the legacy timing.
-std::unique_ptr<usf::n64::System> RunDriver(const usf::rip::Driver& driver, uint32_t track)
+std::unique_ptr<ultralib::machine::System> RunDriver(const usf::rip::Driver& driver, uint32_t track)
 {
-    auto owner = std::make_unique<usf::n64::System>(usf::testing::LegacyOptions());
-    usf::n64::System& system = *owner;
+    auto owner = std::make_unique<ultralib::machine::System>(ultralib::testing::LegacyOptions());
+    ultralib::machine::System& system = *owner;
     system.LoadRom(std::vector<uint8_t>(0x1000, 0));
 
-    usf::testing::WriteProgram(system, driver.address - kKseg0, driver.code);
+    ultralib::testing::WriteProgram(system, driver.address - kKseg0, driver.code);
     system.WritePhysical32(driver.track_word - kKseg0, track);
 
-    usf::testing::WriteProgram(system, kStore,
-                               {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)), mips::Sw(mips::kA0, mips::kT0, 0),
-                                mips::Sw(mips::kA1, mips::kT0, 4), mips::Sw(mips::kA2, mips::kT0, 8),
-                                mips::Sw(mips::kA3, mips::kT0, 12), mips::Jr(mips::kRa), mips::kNop});
+    ultralib::testing::WriteProgram(
+        system, kStore,
+        {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)), mips::Sw(mips::kA0, mips::kT0, 0),
+         mips::Sw(mips::kA1, mips::kT0, 4), mips::Sw(mips::kA2, mips::kT0, 8), mips::Sw(mips::kA3, mips::kT0, 12),
+         mips::Jr(mips::kRa), mips::kNop});
     for (uint32_t n = 0; n < 4; n++)
     {
         const auto offset = static_cast<uint16_t>(0x10 + 4 * n);
-        usf::testing::WriteProgram(system, Counter(n) - kKseg0,
-                                   {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)),
-                                    mips::Lw(mips::kT1, mips::kT0, offset), mips::Addiu(mips::kT1, mips::kT1, 1),
-                                    mips::Sw(mips::kT1, mips::kT0, offset), mips::Jr(mips::kRa), mips::kNop});
+        ultralib::testing::WriteProgram(system, Counter(n) - kKseg0,
+                                        {mips::Lui(mips::kT0, mips::High(kKseg0 | kResults)),
+                                         mips::Lw(mips::kT1, mips::kT0, offset), mips::Addiu(mips::kT1, mips::kT1, 1),
+                                         mips::Sw(mips::kT1, mips::kT0, offset), mips::Jr(mips::kRa), mips::kNop});
     }
-    usf::testing::WriteProgram(system, kCounters + 0x80,
-                               {mips::Lui(mips::kV0, 0x1234), mips::Jr(mips::kRa), mips::kNop});
+    ultralib::testing::WriteProgram(system, kCounters + 0x80,
+                                    {mips::Lui(mips::kV0, 0x1234), mips::Jr(mips::kRa), mips::kNop});
 
-    usf::n64::Cpu& cpu = system.GetCpu();
-    cpu.SetCop0(usf::n64::kCop0Status, 0);
+    ultralib::machine::Cpu& cpu = system.GetCpu();
+    cpu.SetCop0(ultralib::machine::kCop0Status, 0);
     cpu.SetGpr(mips::kSp, 0xFFFFFFFF80300000ull);
     cpu.SetPc(0xFFFFFFFF00000000ull | driver.address);
 
@@ -157,8 +158,8 @@ void DriverRun()
 
     const auto low_owner = RunDriver(driver, 0x21);
     const auto high_owner = RunDriver(driver, 0x80000080);
-    usf::n64::System& low_track = *low_owner;
-    usf::n64::System& high_track = *high_owner;
+    ultralib::machine::System& low_track = *low_owner;
+    ultralib::machine::System& high_track = *high_owner;
 
     XSFLIB_CHECK(low_track.ReadPhysical32(kResults) == (0x21u << 4 | 0x5));
     XSFLIB_CHECK(low_track.ReadPhysical32(kResults + 4) == 0x1234);
@@ -190,7 +191,7 @@ void DriverArguments()
     options.start_calls = {returns, store};
 
     const auto owner = RunDriver(usf::rip::BuildCallDriver(options), 0x2A7);
-    usf::n64::System& system = *owner;
+    ultralib::machine::System& system = *owner;
 
     XSFLIB_CHECK(system.ReadPhysical32(kResults) == 0x12340000);
     XSFLIB_CHECK(system.ReadPhysical32(kResults + 4) == 0xA7);
@@ -212,7 +213,7 @@ void DriverWaitCall()
     options.fields = 3;
 
     const auto owner = RunDriver(usf::rip::BuildCallDriver(options), 0);
-    usf::n64::System& system = *owner;
+    ultralib::machine::System& system = *owner;
 
     // The counters return at once, so the run stops anywhere in a frame.
     const uint32_t frames = CounterValue(system, 0);

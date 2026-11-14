@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include "n64/bits.h"
+#include "ultralib/machine/bits.h"
 #include "usf/track.h"
 
 namespace usf::rip
@@ -15,12 +15,13 @@ TrackPlayer::TrackPlayer(std::span<const uint8_t> rom, std::span<const uint8_t> 
       loop_watches_(options.loop_watches)
 {
     system_.SetCoverage(options.coverage);
-    system_.SetAudioCallback([this](const n64::AudioBuffer& buffer) { Queue(buffer.samples, buffer.sample_rate); });
+    system_.SetAudioCallback([this](const ultralib::machine::AudioBuffer& buffer)
+                             { Queue(buffer.samples, buffer.sample_rate); });
     StartTrack(system_, rom, state);
 
     for (const LoopWatch& watch : loop_watches_)
     {
-        system_.AddBreakpoint(n64::SignExtend32(watch.address));
+        system_.AddBreakpoint(ultralib::machine::SignExtend32(watch.address));
     }
 
     clock_.Start(system_.Now());
@@ -69,7 +70,7 @@ std::vector<LoopEvent> TrackPlayer::TakeLoops(uint64_t frame)
     return taken;
 }
 
-n64::System& TrackPlayer::System()
+ultralib::machine::System& TrackPlayer::System()
 {
     return system_;
 }
@@ -88,7 +89,7 @@ void TrackPlayer::RunSlice()
     if (system_.HitBreakpoint())
     {
         // The game is about to take a loop. Its output so far ends at the queued frames.
-        const n64::Cpu& cpu = system_.GetCpu();
+        const ultralib::machine::Cpu& cpu = system_.GetCpu();
         const uint32_t pc = static_cast<uint32_t>(cpu.Pc());
         for (const LoopWatch& watch : loop_watches_)
         {

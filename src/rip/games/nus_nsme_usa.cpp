@@ -512,7 +512,7 @@ GameProfile NusNsmeUsa()
     profile.set = "sound effects";
     profile.sound_effects = true;
     profile.year = "1996";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
 
     // The driver takes over the game thread at the first return from the sound reset. It requests the track's sound

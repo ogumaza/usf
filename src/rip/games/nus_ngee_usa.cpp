@@ -16,8 +16,7 @@
 //   pointer in t9 and the loop's repeat count in a0. The songs repeat short figures with counts below 0xFF, so only a
 //   count of 0xFF shows a song's loop.
 
-#include <array>
-#include <cstdio>
+#include <cstdint>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
@@ -34,72 +33,6 @@ constexpr uint32_t kLoopJump = 0x7001268C;
 
 // RDRAM from 0x803C0000 stays clear for as long as the game runs.
 constexpr uint32_t kDriverAddress = 0x803FF000;
-
-constexpr std::array<const char*, 63> kTitles = {
-    nullptr,
-    "short death",
-    "intro",
-    "Train",
-    "Depot",
-    "multiplayer 1",
-    "Citadel",
-    "Facility",
-    "Control",
-    "Dam",
-    "Frigate",
-    "Archives",
-    "Silo",
-    "multiplayer 2",
-    "Streets",
-    "Bunker I",
-    "Bunker II",
-    "Statue",
-    "Control, elevator",
-    "Cradle",
-    nullptr,
-    "Caverns, elevator",
-    "Egyptian",
-    "folders",
-    "watch",
-    "Aztec",
-    "Caverns",
-    "death",
-    "Surface II",
-    "Train, second track",
-    nullptr,
-    "Facility, second track",
-    "Depot, second track",
-    "Control, second track",
-    "Caverns, second track",
-    "Dam, second track",
-    "Frigate, second track 1",
-    "Archives, second track",
-    "Silo, second track",
-    nullptr,
-    "Streets, second track",
-    "Bunker I, second track",
-    "Bunker II, second track",
-    "Jungle, second track",
-    "first sound of the intro",
-    "Statue, second track 1",
-    "Aztec, second track",
-    "Egyptian, second track",
-    "Cradle, second track",
-    "Cuba",
-    "Runway",
-    "Runway, second track 2",
-    "multiplayer 3",
-    "wind",
-    "guitar gliss",
-    "Jungle",
-    "Runway, second track 1",
-    "Surface I",
-    "multiplayer death",
-    "Surface II, second track 1",
-    "Surface II, second track 2",
-    "Statue, second track 2",
-    "Frigate, second track 2",
-};
 
 // A sequence's tracks loop separately, and some of them repeat a short figure for ever. The length analysis counts the
 // first track that loops, which ends these songs too soon. Runs that printed every track's jumps give their lengths:
@@ -121,10 +54,10 @@ GameProfile NusNgeeUsa()
     profile.serial = "NUS-NGEE-USA";
     profile.sha1 = "abe01e4aeb033b6c0836819f549c791b26cfde83";
     profile.year = "1997";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
-    profile.eeprom = n64::EepromType::k4Kbit;
+    profile.eeprom = ultralib::machine::EepromType::k4Kbit;
 
     // The game's first request for music is the swoosh of the intro. Nothing plays yet. The driver takes over the game
     // thread there, plays the track and idles. The audio thread does the rest.
@@ -141,17 +74,14 @@ GameProfile NusNgeeUsa()
     profile.loop_watches.push_back(
         {.address = kLoopJump, .target_register = mips::kT9, .track_register = mips::kT3, .count_register = mips::kA0});
 
-    // Entries 0x14, 0x1E and 0x27 play nothing. The set leaves them out.
-    for (uint32_t index = 1; index < kTitles.size(); index++)
+    // The set makes a track for each name in ultralib's table. Entries 0x00, 0x14, 0x1E and 0x27 have no name there and
+    // play nothing. A new name in the table adds a track. Compare usfrip --list, then update the count.
+    static_assert(ultralib::n64::kGoldenEyeSongNames.size() == 59);
+    for (const SongName& song : ultralib::n64::kGoldenEyeSongNames)
     {
-        if (kTitles[index] == nullptr)
-        {
-            continue;
-        }
-
-        char name[64];
-        std::snprintf(name, sizeof(name), "Sequence 0x%02X: %s", index, kTitles[index]);
-        profile.tracks.push_back(NumberedTrack(index, name, kSongLengths));
+        const auto number = static_cast<uint32_t>(song.index);
+        profile.tracks.push_back(
+            NumberedTrack(number, SongTitle("Sequence", number, TitleBase::kHex, song.name), kSongLengths));
     }
 
     return profile;

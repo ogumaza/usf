@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// What the profiles' tracks share: titles made from a number, and the lengths that runs of the songs measured.
+// What the profiles' tracks share: titles made from a number and a song's name, and the lengths that runs of the songs
+// measured.
 
 #pragma once
 
@@ -10,6 +11,7 @@
 #include <string_view>
 
 #include "rip/profile.h"
+#include "ultralib/n64/song_names.h"
 
 namespace usf::rip::games
 {
@@ -38,16 +40,23 @@ std::string NumberTitle(std::string_view label, uint32_t number, TitleBase base)
 // kMeasuredFadeSeconds.
 Track NumberedTrack(uint32_t number, std::string name, std::span<const SongLength> lengths = {});
 
-// The title of a track that a profile names, by the track's number.
-struct NamedNumber
-{
-    uint32_t number = 0;
-    const char* name = nullptr;
-};
+// A song name, by the song number. The tables in ultralib/n64/song_names.h name the songs of some games.
+using ultralib::n64::SongName;
 
-// Makes the track `number` the way NumberedTrack does. Its title is its name in `names`, or else NumberTitle(label,
-// number, base).
-Track NamedOrNumberedTrack(uint32_t number, std::span<const NamedNumber> names, std::string_view label, TitleBase base,
+// The name of song `number` in `names`, or null.
+const char* FindSongName(std::span<const SongName> names, uint32_t number);
+
+// The name of song `number` in `set_names`, or else in `names`, or null. A profile lists in `set_names` the names that
+// its titles word differently from ultralib's table.
+const char* FindSongName(std::span<const SongName> set_names, std::span<const SongName> names, uint32_t number);
+
+// The title of song `number`: NumberTitle(label, number, base), then `name` and `detail`, each after a separator, such
+// as "Sequence 0x2E: Ganon's Tower, entrance". Without a name, `detail` takes its place.
+std::string SongTitle(std::string_view label, uint32_t number, TitleBase base, const char* name,
+                      const char* detail = nullptr);
+
+// Makes the track `number` the way NumberedTrack does. Its title is SongTitle with its name in `names`.
+Track NamedOrNumberedTrack(uint32_t number, std::span<const SongName> names, std::string_view label, TitleBase base,
                            std::span<const SongLength> lengths = {});
 
 } // namespace usf::rip::games

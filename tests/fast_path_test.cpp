@@ -12,9 +12,9 @@
 #include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 
-#include "n64/system.h"
 #include "rip/mips.h"
-#include "test_programs.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 
 namespace
 {
@@ -32,12 +32,12 @@ using mips::kT3;
 using mips::kV0;
 using mips::kV1;
 using mips::kZero;
-using usf::n64::Cpu;
-using usf::n64::System;
-using usf::testing::kCode;
-using usf::testing::kKseg0Address;
-using usf::testing::kStatusCu0And1;
-using usf::testing::SetOptions;
+using ultralib::machine::Cpu;
+using ultralib::machine::System;
+using ultralib::testing::kCode;
+using ultralib::testing::kKseg0Address;
+using ultralib::testing::kStatusCu0And1;
+using ultralib::testing::SetOptions;
 
 constexpr uint64_t kNever = 0xFFFFFFFFFFFFFFF0ull;
 constexpr uint32_t kData = 0x4000;
@@ -86,8 +86,9 @@ void CheckSameState(const System& fast, const System& slow)
         XSFLIB_CHECK(a.Fpr(i) == b.Fpr(i));
     }
 
-    for (const int reg : {usf::n64::kCop0Count, usf::n64::kCop0Random, usf::n64::kCop0Cause, usf::n64::kCop0Status,
-                          usf::n64::kCop0Epc, usf::n64::kCop0BadVAddr, usf::n64::kCop0EntryHi, usf::n64::kCop0Context})
+    for (const int reg : {ultralib::machine::kCop0Count, ultralib::machine::kCop0Random, ultralib::machine::kCop0Cause,
+                          ultralib::machine::kCop0Status, ultralib::machine::kCop0Epc, ultralib::machine::kCop0BadVAddr,
+                          ultralib::machine::kCop0EntryHi, ultralib::machine::kCop0Context})
     {
         XSFLIB_CHECK(a.Cop0(reg) == b.Cop0(reg));
     }
@@ -101,7 +102,7 @@ void CheckSameState(const System& fast, const System& slow)
 // Puts `program` at `address` and moves the CPU to it.
 void LoadProgram(System& system, uint32_t address, const std::vector<uint32_t>& program)
 {
-    usf::testing::WriteProgram(system, address, program);
+    ultralib::testing::WriteProgram(system, address, program);
     system.GetCpu().SetPc(kKseg0Address + address);
 }
 
@@ -314,7 +315,7 @@ void Cop1(uint32_t status)
 {
     const auto setup = [status](System& system)
     {
-        system.GetCpu().SetCop0(usf::n64::kCop0Status, status);
+        system.GetCpu().SetCop0(ultralib::machine::kCop0Status, status);
         system.GetCpu().SetGpr(kT0, kKseg0Address + kData);
         system.GetCpu().SetGpr(kT1, 0x41200000);
     };
@@ -520,11 +521,12 @@ void WaitEndsInAnInterrupt()
     {
         constexpr uint32_t kEret = 0x42000018;
         xsflib::StoreBe32(system.Rdram().data() + 0x180, kEret);
-        system.GetCpu().SetCop0(usf::n64::kCop0Compare, 2000);
+        system.GetCpu().SetCop0(ultralib::machine::kCop0Compare, 2000);
 
         // The timer's line (IM7, at the bit of IP7 in Cause), and interrupts on.
-        constexpr uint32_t kStatus = kStatusCu0And1 | usf::n64::kStatusFr | usf::n64::kCauseIp7 | usf::n64::kStatusIe;
-        system.GetCpu().SetCop0(usf::n64::kCop0Status, kStatus);
+        constexpr uint32_t kStatus =
+            kStatusCu0And1 | ultralib::machine::kStatusFr | ultralib::machine::kCauseIp7 | ultralib::machine::kStatusIe;
+        system.GetCpu().SetCop0(ultralib::machine::kCop0Status, kStatus);
     };
     CheckProgram({Lui(kV0, 0x8000), Immediate(0x24, kV0, kV0, kData + 8), Beq(kV0, 0, -3), mips::kNop}, 60000, setup);
 }
@@ -540,9 +542,9 @@ int main()
                                         Branches();
                                         LoadsAndStores();
                                         PageEdges();
-                                        Cop1(kStatusCu0And1 | usf::n64::kStatusFr); // CU1 with FR set.
-                                        Cop1(kStatusCu0And1);                       // CU1 with FR clear.
-                                        Cop1(usf::n64::kStatusCu0);                 // COP1 unusable: the exception.
+                                        Cop1(kStatusCu0And1 | ultralib::machine::kStatusFr); // CU1 with FR set.
+                                        Cop1(kStatusCu0And1);                                // CU1 with FR clear.
+                                        Cop1(ultralib::machine::kStatusCu0); // COP1 unusable: the exception.
                                         Loops();
                                         ViPolls();
                                         ViPollAtInterrupt();

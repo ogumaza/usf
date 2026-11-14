@@ -43,12 +43,8 @@ constexpr uint32_t kSequences = 15;
 GameProfile Aleck64VividDolls()
 {
     GameProfile profile =
-        Aleck64Profile(n64::Board::kAleck64, {
-                                                 {.sha1 = "06d8b808cc19378b046803f4dc75c7d791b7767f", .size = 0x800000},
-                                             });
-    profile.game = "Vivid Dolls";
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "747e9420cce23ff82b5922cd91ec43272d03fa4f");
     profile.serial = "Aleck64 Vivid Dolls";
-    profile.sha1 = "747e9420cce23ff82b5922cd91ec43272d03fa4f";
     profile.year = "1998";
     profile.sound_driver = kCompressedSequencePlayer;
 

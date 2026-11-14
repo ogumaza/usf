@@ -53,14 +53,9 @@ constexpr SongLength kSongLengths[] = {
 
 GameProfile Aleck64HanabiDeDoon()
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64,
-                                         {
-                                             {.sha1 = "4f41ee23edc18110be1218ba333d1c58376ab175", .size = 0x1000000},
-                                             {.sha1 = "c8cc6c0a456b593aef711d0a75b2342ba2f8203f", .size = 0x1000000},
-                                         });
-    profile.game = "Hanabi de Doon! - Don-chan Puzzle";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "2a77e47d34b8d9d89eb37ffc062e9ec0c2121abc");
     profile.serial = "Aleck64 Hanabi de Doon";
-    profile.sha1 = "2a77e47d34b8d9d89eb37ffc062e9ec0c2121abc";
     profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
 

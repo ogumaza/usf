@@ -13,16 +13,16 @@
 #include <cstdint>
 #include <vector>
 
-#include "n64/coverage.h"
-#include "n64/word_set.h"
 #include "rip/snapshot.h"
+#include "ultralib/machine/coverage.h"
+#include "ultralib/machine/word_set.h"
 #include "usf/usf_file.h"
 
 namespace usf::rip
 {
 
 // Trimming uses the word sets of the core.
-using WordSet = n64::WordSet;
+using WordSet = ultralib::machine::WordSet;
 
 // What one track's run read.
 struct TrackWords
@@ -32,7 +32,7 @@ struct TrackWords
 };
 
 // The words that `coverage` recorded, for a ROM image of `rom_image_size` bytes and RDRAM of `rdram_size` bytes.
-TrackWords WordsOf(const n64::Coverage& coverage, uint32_t rom_image_size, uint32_t rdram_size);
+TrackWords WordsOf(const ultralib::machine::Coverage& coverage, uint32_t rom_image_size, uint32_t rdram_size);
 
 // A set's files before their tags: the library's sections and each mini's.
 struct SetSections

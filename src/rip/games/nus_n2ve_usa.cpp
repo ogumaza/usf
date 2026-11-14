@@ -39,12 +39,6 @@ constexpr uint32_t kLoopJump = 0x800CF48C;
 
 constexpr uint32_t kSequences = 24;
 
-// The titles of the tracks that have a name.
-constexpr NamedNumber kTitles[] = {
-    {0x0D, "Sequence 0x0D: after the logos"},
-    {0x10, "Sequence 0x10: menus"},
-};
-
 } // namespace
 
 GameProfile NusN2veUsa()
@@ -54,7 +48,7 @@ GameProfile NusN2veUsa()
     profile.serial = "NUS-N2VE-USA";
     profile.sha1 = "9fa379d66b218228da3cbf386c91d857c677f489";
     profile.year = "1999";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
@@ -75,7 +69,8 @@ GameProfile NusN2veUsa()
 
     for (uint32_t index = 0; index < kSequences; index++)
     {
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Sequence", TitleBase::kHex));
+        profile.tracks.push_back(
+            NamedOrNumberedTrack(index, ultralib::n64::kChameleonTwist2SongNames, "Sequence", TitleBase::kHex));
     }
 
     return profile;

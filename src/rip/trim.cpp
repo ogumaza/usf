@@ -4,7 +4,7 @@
 
 #include <utility>
 
-#include "n64/save_state.h"
+#include "ultralib/machine/save_state.h"
 
 namespace usf::rip
 {
@@ -42,7 +42,7 @@ Chunk StateChunk(const std::vector<uint8_t>& state, uint32_t offset, uint32_t le
 std::vector<Chunk> StateChunksWithoutZeroWords(const std::vector<uint8_t>& state)
 {
     const auto rdram_size = static_cast<uint32_t>(state.size() - kStateOverhead);
-    const uint8_t* rdram = state.data() + n64::kStateRdramOffset;
+    const uint8_t* rdram = state.data() + ultralib::machine::kStateRdramOffset;
     WordSet nonzero(rdram_size);
     for (uint32_t word = 0; word < rdram_size / 4; word++)
     {
@@ -53,13 +53,14 @@ std::vector<Chunk> StateChunksWithoutZeroWords(const std::vector<uint8_t>& state
         }
     }
 
-    std::vector<Chunk> chunks{StateChunk(state, 0, n64::kStateRdramOffset)};
-    for (const n64::ByteRange& range : nonzero.Ranges(kMaxGap))
+    std::vector<Chunk> chunks{StateChunk(state, 0, ultralib::machine::kStateRdramOffset)};
+    for (const ultralib::machine::ByteRange& range : nonzero.Ranges(kMaxGap))
     {
-        chunks.push_back(StateChunk(state, n64::kStateRdramOffset + range.offset, range.length));
+        chunks.push_back(StateChunk(state, ultralib::machine::kStateRdramOffset + range.offset, range.length));
     }
 
-    chunks.push_back(StateChunk(state, n64::kStateRdramOffset + rdram_size, kStateOverhead - n64::kStateRdramOffset));
+    chunks.push_back(StateChunk(state, ultralib::machine::kStateRdramOffset + rdram_size,
+                                kStateOverhead - ultralib::machine::kStateRdramOffset));
 
     return chunks;
 }
@@ -67,7 +68,7 @@ std::vector<Chunk> StateChunksWithoutZeroWords(const std::vector<uint8_t>& state
 std::vector<Chunk> RomChunks(const std::vector<uint8_t>& rom, const WordSet& words)
 {
     std::vector<Chunk> chunks;
-    for (const n64::ByteRange& range : words.Ranges(kMaxGap))
+    for (const ultralib::machine::ByteRange& range : words.Ranges(kMaxGap))
     {
         chunks.push_back(RomChunk(rom, range.offset, range.length));
     }
@@ -77,7 +78,7 @@ std::vector<Chunk> RomChunks(const std::vector<uint8_t>& rom, const WordSet& wor
 
 } // namespace
 
-TrackWords WordsOf(const n64::Coverage& coverage, uint32_t rom_image_size, uint32_t rdram_size)
+TrackWords WordsOf(const ultralib::machine::Coverage& coverage, uint32_t rom_image_size, uint32_t rdram_size)
 {
     TrackWords words{WordSet(rom_image_size), WordSet(rdram_size)};
     words.rom.Merge(coverage.RomWords());

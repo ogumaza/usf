@@ -32,11 +32,13 @@
 
 #include <bit>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 #include "rip/mips.h"
 
 namespace usf::rip::games
@@ -54,16 +56,6 @@ constexpr uint32_t kFullVolume = 0x7FFF;
 
 // The end of RDRAM. A run of the game holds zeros there.
 constexpr uint32_t kDriverAddress = 0x803FF000;
-
-constexpr const char* kCues[] = {
-    "Yours ever",  "Camp night",   "Mamma mia!",    "Joyful",      "Home at last", "Prairie wind",  "Wood music",
-    "Hello!",      "Daring days",  "Discovery",     "Play days",   "Misty lake",   "My bedroom",    "Pi-pikachu!",
-    "Go shopping", "Quiz time",    "Who am I?",     "Feel lonely", "Over the sea", "Gone fishing!", "Opening 1",
-    "Opening 2",   "Success",      "See you later", "Picnic",      "What's up?",   "Boo",           "Call",
-    "Counting",    "A good thing", "Evolved",       "Evolving",    "Eye icon",     "Eye mode",      "Failure",
-    "Harmonica 1", "Harmonica 2",  "Out of tune",   "In tune",     "Fly around",   "Correct",       "Trumpet 1",
-    "Trumpet 2",   "Sea noise",    "Doing well",
-};
 
 struct SlowCue
 {
@@ -134,20 +126,28 @@ GameProfile NusNpgeUsa()
 
     profile.loop_watches.push_back({.address = kLoopEnd});
 
-    uint32_t number = 0;
-    for (const char* name : kCues)
+    // The set makes a track for each name in ultralib's table: cues 0 to 44, in order. A new name there adds a track.
+    // Compare usfrip --list, then update the count.
+    static_assert(ultralib::n64::kHeyYouPikachuSongNames.size() == 45);
+    for (const SongName& cue : ultralib::n64::kHeyYouPikachuSongNames)
     {
         Track track;
-        track.number = number++;
-        track.name = name;
+        track.number = static_cast<uint32_t>(cue.index);
+        track.name = cue.name;
         profile.tracks.push_back(track);
     }
 
     for (const SlowCue& slow : kSlowCues)
     {
+        const char* name = FindSongName(ultralib::n64::kHeyYouPikachuSongNames, slow.cue);
+        if (name == nullptr)
+        {
+            throw std::logic_error("a slower cue of Hey You, Pikachu! has no name");
+        }
+
         Track track;
         track.number = slow.cue;
-        track.name = std::string(kCues[slow.cue]) + ", slower";
+        track.name = std::string(name) + ", slower";
         track.rdram_patches = StartRatePatches(slow.rate);
         profile.tracks.push_back(track);
     }

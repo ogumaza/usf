@@ -68,12 +68,12 @@ bool Player::Playable() const
 
 bool Player::StartSource()
 {
-    system_ = std::make_unique<n64::System>(TrackOptions(set_));
+    system_ = std::make_unique<ultralib::machine::System>(TrackOptions(set_));
     samples_.clear();
     rates_.clear();
 
     system_->SetAudioCallback(
-        [this](const n64::AudioBuffer& buffer)
+        [this](const ultralib::machine::AudioBuffer& buffer)
         {
             clock_.OnBuffer(buffer.samples.size() / 2, buffer.sample_rate, system_->Now(), system_->TicksPerSecond());
             AddSamples(buffer.samples, buffer.sample_rate);

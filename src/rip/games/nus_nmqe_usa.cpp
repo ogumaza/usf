@@ -30,14 +30,16 @@
 //   (priority 10), in a jump to itself at 0x80026054, and the idle thread (0x800A4270, priority 0), in a branch to
 //   itself at 0x8005E98C.
 
-#include <cstdio>
+#include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 #include "xsflib/bytes.h"
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 #include "rip/mips.h"
 
 namespace usf::rip::games
@@ -137,14 +139,18 @@ struct StartEffect
 };
 
 // The game gives these no single value, and each one is a choice.
-// - Normal Battle follows any field song. Script starts of field songs set effect 5 most often: 259, to 205 for effect
-//   1.
+// - Normal Battle keeps the effect of the field song that played before the battle. The function at 0x8014AEF8 pushes
+//   the field song and starts the battle song. The battle song sets no effect. Of the game's areas with enemies, 6.5
+//   play the battle after effect 1, the small room. Another 6.5 play it after effect 5, the echo, and 5 after effect 2
+//   or 10, the big room. An area with two field songs counts half for each. The game's first battles come after effect
+//   1, on the roads around Goomba Village and Koopa Village. The versions therefore start with effect 1.
+//   kEffectGroups adds tracks for the other two effects.
 // - Raphael Raven plays in Deep Jungle, whose first version sets effect 2.
 // - Four versions set their effect in a later phrase, and they start with that effect: 0x70, 0x79, 0x83 and 0x91.
 // - The rest are later versions of a song, which no script starts with a constant. They start with the effect of the
 //   song's first version.
 constexpr StartEffect kStartEffects[] = {
-    {Number(0x01, 2), 1},  {Number(0x02, 1), 5},  {Number(0x02, 2), 5},  {Number(0x02, 3), 5},  {Number(0x02, 4), 5},
+    {Number(0x01, 2), 1},  {Number(0x02, 1), 1},  {Number(0x02, 2), 1},  {Number(0x02, 3), 1},  {Number(0x02, 4), 1},
     {Number(0x05, 3), 5},  {Number(0x0E, 2), 10}, {Number(0x14, 3), 5},  {Number(0x19, 2), 2},  {Number(0x1B, 3), 2},
     {Number(0x1C, 2), 10}, {Number(0x1E, 3), 5},  {Number(0x24, 2), 1},  {Number(0x25, 2), 2},  {Number(0x28, 1), 2},
     {Number(0x28, 3), 2},  {Number(0x2A, 2), 2},  {Number(0x2C, 2), 10}, {Number(0x37, 2), 5},  {Number(0x39, 2), 10},
@@ -155,195 +161,103 @@ constexpr StartEffect kStartEffects[] = {
     {Number(0x91, 2), 5},  {Number(0x96, 3), 10},
 };
 
+// One more group of tracks for a song that the game plays after more than one effect, in many areas each. The group has
+// a track for each of the song's first `versions` versions. Each track starts with `effect`, and its title ends with
+// `title`.
+struct EffectGroup
+{
+    uint32_t song;
+    uint32_t versions;
+    uint32_t effect;
+    const char* title;
+};
+
+// The encounter code at 0x8004166C to 0x800416BC starts versions 1 to 3 of Normal Battle, by who strikes first.
+constexpr EffectGroup kEffectGroups[] = {{0x02, 3, 5, "echo"}, {0x02, 3, 2, "big room"}};
+
+// The number of an effect group's track contains the effect above the change. The driver's calls ignore it. It keeps
+// the numbers of a song's tracks distinct.
+constexpr int kGroupShift = 24;
+
 // The second version of this song lists the same phrases as the first.
 constexpr uint32_t kRepeatedVersion = Number(0x61, 2);
 
 // The end of RDRAM. A run of the game holds zeros from 0x8038A978 to the end.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
+// A song in the game's list, with the number of versions. ultralib's table gives the song names.
 struct Song
 {
     uint32_t number;
     uint32_t versions;
-    const char* name;
 };
 
 // The songs in the game's list. Many entries in the list repeat Goomba Village, and the set holds it once.
 constexpr Song kSongs[] = {
-    {0x00, 2, "Toad Town"},
-    {0x01, 2, "Goomba Village"},
-    {0x02, 4, "Normal Battle"},
-    {0x03, 3, "Special Battle"},
-    {0x04, 2, "Jr. Troopa Battle"},
-    {0x05, 3, "Final Bowser Battle"},
-    {0x07, 2, "Goomba King Battle"},
-    {0x08, 2, "Koopa Bros Battle"},
-    {0x09, 2, "Fake Bowser Battle"},
-    {0x0A, 2, "Tutankoopa Battle"},
-    {0x0B, 3, "Tubba Blubba Battle"},
-    {0x0C, 2, "General Guy Battle"},
-    {0x0D, 3, "Lava Piranha Battle"},
-    {0x0E, 2, "Huff N. Puff Battle"},
-    {0x0F, 2, "Crystal King Battle"},
-    {0x11, 1, "Pleasant Path"},
-    {0x12, 2, "Fuzzy Attack"},
-    {0x13, 2, "Koopa Village"},
-    {0x14, 3, "Koopa Fortress"},
-    {0x15, 2, "Dry Dry Outpost"},
-    {0x16, 1, "Mt. Rugged"},
-    {0x17, 1, "Dry Dry Desert"},
-    {0x18, 2, "Dry Dry Ruins"},
-    {0x19, 2, "Ruins Basement"},
-    {0x1A, 2, "Forever Forest"},
-    {0x1B, 3, "Boo's Mansion"},
-    {0x1C, 2, "Cheerful Boo's Mansion"},
-    {0x1D, 1, "Gusty Gulch"},
-    {0x1E, 3, "Tubba's Manor"},
-    {0x1F, 2, "Tubba Escape"},
-    {0x20, 1, "Shy Guy Toybox"},
-    {0x21, 1, "Toybox Train"},
-    {0x22, 1, "Creepy Toybox"},
-    {0x24, 2, "Jade Jungle"},
-    {0x25, 2, "Deep Jungle"},
-    {0x26, 3, "Yoshi's Village"},
-    {0x27, 2, "Yoshi's Panic"},
-    {0x28, 3, "Raphael Raven"},
-    {0x29, 3, "Mt. Lavalava"},
-    {0x2A, 2, "Volcano Escape"},
-    {0x2B, 4, "Star Way Opens"},
-    {0x2C, 2, "Master Battle"},
-    {0x2D, 1, "Radio Island Sounds"},
-    {0x2E, 1, "Radio Hot Hits"},
-    {0x2F, 1, "Radio Golden Oldies"},
-    {0x30, 2, "Flower Fields Cloudy"},
-    {0x31, 2, "Flower Fields Sunny"},
-    {0x32, 1, "Cloudy Climb"},
-    {0x33, 2, "Puff Puff Machine"},
-    {0x34, 2, "Sun Tower Cloudy"},
-    {0x35, 2, "Sun Tower Sunny"},
-    {0x37, 2, "Crystal Palace"},
-    {0x38, 1, "Shiver City"},
-    {0x39, 2, "Penguin Mystery"},
-    {0x3A, 1, "Shiver Snowfield"},
-    {0x3B, 1, "Shiver Mountain"},
-    {0x3C, 1, "Starborn Valley"},
-    {0x3D, 1, "Merlar Theme"},
-    {0x3E, 1, "Mail Call"},
-    {0x3F, 3, "Peach's Castle Party"},
-    {0x40, 2, "Chapter End"},
-    {0x41, 3, "Chapter Start"},
-    {0x42, 2, "Item Upgrade"},
-    {0x44, 1, "Phonograph Music"},
-    {0x45, 1, "Tutankoopa Theme"},
-    {0x46, 2, "Kammy Koopa Theme"},
-    {0x47, 3, "Jr. Troopa Theme"},
-    {0x48, 2, "Bullet Bill Assault"},
-    {0x49, 2, "Monty Mole Assault"},
-    {0x4A, 2, "Shy Guy Invasion"},
-    {0x4B, 2, "Toad Town Tunnels"},
-    {0x4C, 2, "Whale Theme"},
-    {0x4D, 1, "Forever Forest Warning"},
-    {0x4E, 2, "Yoshi Kids Found"},
-    {0x4F, 1, "Unused Fanfare"},
-    {0x50, 2, "Goomba King Theme"},
-    {0x51, 1, "Koopa Bros Interlude"},
-    {0x52, 4, "Koopa Bros Theme"},
-    {0x53, 1, "Tutankoopa Warning"},
-    {0x54, 2, "Tutankoopa Revealed"},
-    {0x55, 2, "Tubba Blubba Theme"},
-    {0x56, 2, "General Guy Theme"},
-    {0x57, 2, "Lava Piranha Theme"},
-    {0x58, 2, "Huff N. Puff Theme"},
-    {0x59, 1, "Crystal King Theme"},
-    {0x5A, 2, "Blooper Theme"},
-    {0x5B, 3, "Miniboss Battle"},
-    {0x5C, 2, "Monstar Theme"},
-    {0x5D, 2, "Club 64"},
-    {0x5E, 1, "Unused Opening"},
-    {0x5F, 1, "Bowser's Castle Falls"},
-    {0x60, 2, "Star Haven"},
-    {0x61, 3, "Shooting Star Summit"},
-    {0x62, 3, "Starship Theme"},
-    {0x63, 3, "Star Sanctuary"},
-    {0x64, 3, "Bowser's Castle"},
-    {0x65, 2, "Bowser's Castle Caves"},
-    {0x66, 3, "Bowser Theme"},
-    {0x67, 2, "Bowser Battle"},
-    {0x68, 2, "Peach Wishes"},
-    {0x69, 2, "File Select"},
-    {0x6A, 3, "Main Theme"},
-    {0x6B, 3, "Bowser Attacks"},
-    {0x6C, 1, "Mario Falls"},
-    {0x6D, 3, "Peach Appears"},
-    {0x6E, 2, "The End"},
-    {0x6F, 1, "Recovered Star Rod"},
-    {0x70, 3, "Twink Theme"},
-    {0x71, 1, "Stirring Cake"},
-    {0x72, 1, "Gourmet Guy Freakout"},
-    {0x73, 2, "Prisoner Peach Theme"},
-    {0x74, 2, "Peach Mission"},
-    {0x75, 2, "Peach Sneaking"},
-    {0x76, 1, "Peach Caught"},
-    {0x77, 3, "Peach Quiz Intro"},
-    {0x78, 2, "Star Spirit Theme"},
-    {0x79, 3, "Penguin Whodunit"},
-    {0x7A, 2, "Penguin Wakes Up"},
-    {0x7B, 3, "Magic Beanstalk"},
-    {0x7C, 3, "Merlee Spell"},
-    {0x7D, 2, "Lakilester Theme"},
-    {0x7E, 3, "Goomba Bros Retreat"},
-    {0x7F, 2, "Sunshine Returns"},
-    {0x80, 2, "Riding the Rails"},
-    {0x81, 2, "Riding the Whale"},
-    {0x82, 2, "New Partner"},
-    {0x83, 2, "Dry Dry Ruins Appear"},
-    {0x84, 1, "Candy Canes"},
-    {0x85, 1, "Playroom"},
-    {0x86, 2, "Moustafa Theme"},
-    {0x87, 1, "Game Over"},
-    {0x88, 1, "Taking Rest"},
-    {0x89, 4, "Flower NPC Theme"},
-    {0x8A, 1, "Flower Gate Appears"},
-    {0x8B, 2, "Battle End"},
-    {0x8C, 2, "Pop Diva Song"},
-    {0x8D, 2, "Boo Minigame"},
-    {0x8E, 2, "Level Up"},
-    {0x90, 2, "Parade Day"},
-    {0x91, 2, "Parade Night"},
-    {0x94, 1, "Mario Bros House"},
-    {0x95, 4, "Intro Story"},
-    {0x96, 3, "New Partner (Japanese)"},
+    {0x00, 2}, {0x01, 2}, {0x02, 4}, {0x03, 3}, {0x04, 2}, {0x05, 3}, {0x07, 2}, {0x08, 2}, {0x09, 2}, {0x0A, 2},
+    {0x0B, 3}, {0x0C, 2}, {0x0D, 3}, {0x0E, 2}, {0x0F, 2}, {0x11, 1}, {0x12, 2}, {0x13, 2}, {0x14, 3}, {0x15, 2},
+    {0x16, 1}, {0x17, 1}, {0x18, 2}, {0x19, 2}, {0x1A, 2}, {0x1B, 3}, {0x1C, 2}, {0x1D, 1}, {0x1E, 3}, {0x1F, 2},
+    {0x20, 1}, {0x21, 1}, {0x22, 1}, {0x24, 2}, {0x25, 2}, {0x26, 3}, {0x27, 2}, {0x28, 3}, {0x29, 3}, {0x2A, 2},
+    {0x2B, 4}, {0x2C, 2}, {0x2D, 1}, {0x2E, 1}, {0x2F, 1}, {0x30, 2}, {0x31, 2}, {0x32, 1}, {0x33, 2}, {0x34, 2},
+    {0x35, 2}, {0x37, 2}, {0x38, 1}, {0x39, 2}, {0x3A, 1}, {0x3B, 1}, {0x3C, 1}, {0x3D, 1}, {0x3E, 1}, {0x3F, 3},
+    {0x40, 2}, {0x41, 3}, {0x42, 2}, {0x44, 1}, {0x45, 1}, {0x46, 2}, {0x47, 3}, {0x48, 2}, {0x49, 2}, {0x4A, 2},
+    {0x4B, 2}, {0x4C, 2}, {0x4D, 1}, {0x4E, 2}, {0x4F, 1}, {0x50, 2}, {0x51, 1}, {0x52, 4}, {0x53, 1}, {0x54, 2},
+    {0x55, 2}, {0x56, 2}, {0x57, 2}, {0x58, 2}, {0x59, 1}, {0x5A, 2}, {0x5B, 3}, {0x5C, 2}, {0x5D, 2}, {0x5E, 1},
+    {0x5F, 1}, {0x60, 2}, {0x61, 3}, {0x62, 3}, {0x63, 3}, {0x64, 3}, {0x65, 2}, {0x66, 3}, {0x67, 2}, {0x68, 2},
+    {0x69, 2}, {0x6A, 3}, {0x6B, 3}, {0x6C, 1}, {0x6D, 3}, {0x6E, 2}, {0x6F, 1}, {0x70, 3}, {0x71, 1}, {0x72, 1},
+    {0x73, 2}, {0x74, 2}, {0x75, 2}, {0x76, 1}, {0x77, 3}, {0x78, 2}, {0x79, 3}, {0x7A, 2}, {0x7B, 3}, {0x7C, 3},
+    {0x7D, 2}, {0x7E, 3}, {0x7F, 2}, {0x80, 2}, {0x81, 2}, {0x82, 2}, {0x83, 2}, {0x84, 1}, {0x85, 1}, {0x86, 2},
+    {0x87, 1}, {0x88, 1}, {0x89, 4}, {0x8A, 1}, {0x8B, 2}, {0x8C, 2}, {0x8D, 2}, {0x8E, 2}, {0x90, 2}, {0x91, 2},
+    {0x94, 1}, {0x95, 4}, {0x96, 3},
 };
+
+// The name of `song` in ultralib's table.
+const char* SongNameOf(const Song& song)
+{
+    return FindSongName(ultralib::n64::kPaperMarioSongNames, song.number);
+}
+
+// The request word that starts a track with `effect`.
+RdramPatch EffectPatch(uint32_t effect)
+{
+    return {.address = kEffectRequest, .words = {(effect << kEffectShift) | kEffectRequested}};
+}
+
+// The title of `version` of `song`, counting from 1, with `detail` after it if it isn't null.
+std::string VersionTitle(const Song& song, uint32_t version, const char* detail)
+{
+    std::string text;
+    if (version > 1)
+    {
+        text = "version " + std::to_string(version);
+    }
+    if (detail != nullptr)
+    {
+        text += text.empty() ? detail : std::string(", ") + detail;
+    }
+
+    return SongTitle("Song", song.number, TitleBase::kHex, SongNameOf(song), text.empty() ? nullptr : text.c_str());
+}
 
 // Adds a track for each version of `song`, with the effect that the version starts with.
 void AddVersionTracks(const Song& song, std::vector<Track>& tracks)
 {
-    for (uint32_t version = 0; version < song.versions; version++)
+    for (uint32_t version = 1; version <= song.versions; version++)
     {
         Track track;
-        track.number = Number(song.number, version + 1);
+        track.number = Number(song.number, version);
         if (track.number == kRepeatedVersion)
         {
             continue;
         }
 
-        char name[96];
-        if (version == 0)
-        {
-            std::snprintf(name, sizeof(name), "Song 0x%02X: %s", song.number, song.name);
-        }
-        else
-        {
-            std::snprintf(name, sizeof(name), "Song 0x%02X: %s, version %u", song.number, song.name, version + 1);
-        }
-        track.name = name;
+        track.name = VersionTitle(song, version, nullptr);
 
         for (const StartEffect& effect : kStartEffects)
         {
             if (effect.number == track.number)
             {
-                track.rdram_patches.push_back(
-                    {.address = kEffectRequest, .words = {(effect.effect << kEffectShift) | kEffectRequested}});
+                track.rdram_patches.push_back(EffectPatch(effect.effect));
             }
         }
 
@@ -352,6 +266,27 @@ void AddVersionTracks(const Song& song, std::vector<Track>& tracks)
             track.length_seconds = kShortTrackSeconds;
         }
         tracks.push_back(track);
+    }
+}
+
+// Adds a track for each version of each effect group of `song`.
+void AddEffectTracks(const Song& song, std::vector<Track>& tracks)
+{
+    for (const EffectGroup& group : kEffectGroups)
+    {
+        if (group.song != song.number)
+        {
+            continue;
+        }
+
+        for (uint32_t version = 1; version <= group.versions; version++)
+        {
+            Track track;
+            track.number = (group.effect << kGroupShift) | Number(song.number, version);
+            track.name = VersionTitle(song, version, group.title);
+            track.rdram_patches.push_back(EffectPatch(group.effect));
+            tracks.push_back(track);
+        }
     }
 }
 
@@ -364,9 +299,7 @@ void AddChangeTracks(const Song& song, std::vector<Track>& tracks)
         {
             Track track;
             track.number = (change.change << kChangeShift) | song.number;
-            char name[96];
-            std::snprintf(name, sizeof(name), "Song 0x%02X: %s, %s", song.number, song.name, change.title);
-            track.name = name;
+            track.name = SongTitle("Song", song.number, TitleBase::kHex, SongNameOf(song), change.title);
             tracks.push_back(track);
         }
     }
@@ -395,7 +328,7 @@ GameProfile NusNmqeUsa()
     profile.serial = "NUS-NMQE-USA";
     profile.sha1 = "3837f44cda784b466c9a2d99df70d77c322b97a0";
     profile.year = "2001";
-    profile.cic = n64::Cic::k6103;
+    profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = "Paper Mario BGM player";
     profile.controller = true;
 
@@ -446,6 +379,7 @@ GameProfile NusNmqeUsa()
     for (const Song& song : kSongs)
     {
         AddVersionTracks(song, profile.tracks);
+        AddEffectTracks(song, profile.tracks);
         AddChangeTracks(song, profile.tracks);
     }
 

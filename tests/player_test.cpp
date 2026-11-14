@@ -23,11 +23,11 @@
 #include "xsflib/testing/sets.h"
 #include "xsflib/testing/temp_folder.h"
 
-#include "n64/save_state.h"
-#include "n64/system.h"
 #include "rip/mips.h"
 #include "test_mips.h"
-#include "test_programs.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "usf/usf_file.h"
 
 namespace
@@ -46,9 +46,9 @@ using mips::kT3;
 using mips::kT4;
 using mips::kT5;
 using mips::kZero;
-using usf::n64::kKseg0;
-using usf::testing::kCode;
-using usf::testing::kStateA0;
+using ultralib::machine::kKseg0;
+using ultralib::testing::kCode;
+using ultralib::testing::kStateA0;
 
 constexpr uint32_t kBuffer = 0x00200000;
 constexpr uint32_t kRomSize = 0x1000;
@@ -203,9 +203,9 @@ public:
     TestSet(const std::vector<uint32_t>& words, xsflib::psf::Tags mini_tags) : folder_("usf_player_test")
     {
         usf::Sections library;
-        library.rom = std::vector<usf::Chunk>{{0, usf::testing::TestRom(kRomSize)}};
-        library.state =
-            std::vector<usf::Chunk>{{0, usf::testing::ProgramState(usf::testing::TestRom(kRomSize), words, 0)}};
+        library.rom = std::vector<usf::Chunk>{{0, ultralib::testing::TestRom(kRomSize)}};
+        library.state = std::vector<usf::Chunk>{
+            {0, ultralib::testing::ProgramState(ultralib::testing::TestRom(kRomSize), words, 0)}};
         XSFLIB_CHECK(!xsflib::WriteFile(folder_.Path() / "Test.usflib", usf::WriteUsf(library, {})));
 
         std::vector<uint8_t> a0(8, 0);
@@ -374,7 +374,7 @@ void Failures()
 
     // A file with no state in its chain.
     usf::Sections sections;
-    sections.rom = std::vector<usf::Chunk>{{0, usf::testing::TestRom(kRomSize)}};
+    sections.rom = std::vector<usf::Chunk>{{0, ultralib::testing::TestRom(kRomSize)}};
     const std::filesystem::path stateless = set.Folder() / "Stateless.usf";
     XSFLIB_CHECK(!xsflib::WriteFile(stateless, usf::WriteUsf(sections, {})));
     usf::Player empty;

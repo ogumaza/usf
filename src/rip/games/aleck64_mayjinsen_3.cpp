@@ -40,12 +40,8 @@ constexpr uint32_t kSequences = 12;
 GameProfile Aleck64Mayjinsen3()
 {
     GameProfile profile =
-        Aleck64Profile(n64::Board::kAleck64, {
-                                                 {.sha1 = "b5834bfde5b8a7e20415b2593abd76ec95ab27c7", .size = 0x800000},
-                                             });
-    profile.game = "Mayjinsen 3";
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "da401fc96a2b69db81970d879a2255e54db88e34");
     profile.serial = "Aleck64 Mayjinsen 3";
-    profile.sha1 = "da401fc96a2b69db81970d879a2255e54db88e34";
     profile.year = "2000";
     profile.sound_driver = kCompressedSequencePlayer;
 

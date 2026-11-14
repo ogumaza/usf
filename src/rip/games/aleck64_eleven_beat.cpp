@@ -45,12 +45,8 @@ constexpr uint32_t kSystemInputs = 0xFF3CFFFF;
 GameProfile Aleck64ElevenBeat()
 {
     GameProfile profile =
-        Aleck64Profile(n64::Board::kAleck64, {
-                                                 {.sha1 = "824911452639cedf6a8186c05cd046e61fc98896", .size = 0x800000},
-                                             });
-    profile.game = "Eleven Beat";
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "5432056f34c378b5862009e5b79a256c10c5a20e");
     profile.serial = "Aleck64 Eleven Beat";
-    profile.sha1 = "5432056f34c378b5862009e5b79a256c10c5a20e";
     profile.year = "1998";
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;

@@ -54,14 +54,9 @@ constexpr SongLength kSongLengths[] = {
 
 GameProfile Aleck64KurukuruFever()
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64,
-                                         {
-                                             {.sha1 = "824fdce01fffdfcbcc9b1fbda4ab389a10b2b418", .size = 0x1000000},
-                                             {.sha1 = "2b6ca1a769dee74e112c2b287dacd0bf46dda091", .size = 0x1000000},
-                                         });
-    profile.game = "Kurukuru Fever";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "f59c121e4d4c2c57c2ea4728919775a8d5d5e02e");
     profile.serial = "Aleck64 Kurukuru Fever";
-    profile.sha1 = "f59c121e4d4c2c57c2ea4728919775a8d5d5e02e";
     profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
 

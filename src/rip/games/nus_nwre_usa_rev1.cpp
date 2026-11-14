@@ -60,10 +60,10 @@ GameProfile NusNwreUsaRev1()
     profile.serial = "NUS-NWRE-USA-rev1";
     profile.sha1 = "508dfc2d4caa42b6f6de5263d0aed5e44ac7966a";
     profile.year = "1996";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
     profile.controller = true;
-    profile.eeprom = n64::EepromType::k4Kbit;
+    profile.eeprom = ultralib::machine::EepromType::k4Kbit;
 
     // The driver takes over the game thread at the first call of the function that starts the sound effects. It plays
     // the track's sequence as the music function does, sends the commands, and then waits.

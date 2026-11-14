@@ -221,9 +221,9 @@ GameProfile NusNyseUsa()
     profile.serial = "NUS-NYSE-USA";
     profile.sha1 = "b13072fef6c6df48c07d8822c01e5bc59036f6da";
     profile.year = "1997";
-    profile.cic = n64::Cic::k6106;
+    profile.cic = ultralib::machine::Cic::k6106;
     profile.sound_driver = "Nintendo EAD sound engine";
-    profile.eeprom = n64::EepromType::k16Kbit;
+    profile.eeprom = ultralib::machine::EepromType::k16Kbit;
 
     // The snapshot is the first quiet sound frame from the third on. That's the fourth, at 0.51 s, once the sound
     // engine has started and before any music plays. The game boots without a controller. The driver takes over the

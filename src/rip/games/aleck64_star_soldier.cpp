@@ -49,12 +49,8 @@ constexpr uint32_t kSystemInputs = 0xFF3CFFFF;
 GameProfile Aleck64StarSoldier()
 {
     GameProfile profile =
-        Aleck64Profile(n64::Board::kAleck64, {
-                                                 {.sha1 = "3794606c008fb69f5d16dcccece94d03da23bf8a", .size = 0xC00000},
-                                             });
-    profile.game = "Star Soldier: Vanishing Earth";
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "a29348632ed7726d75d693dfb007f277c1f6a563");
     profile.serial = "Aleck64 Star Soldier: Vanishing Earth";
-    profile.sha1 = "a29348632ed7726d75d693dfb007f277c1f6a563";
     profile.year = "1998";
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;

@@ -106,7 +106,9 @@ constexpr uint32_t kGexzil9 = 23;
 constexpr uint32_t kFinal01 = 24;
 constexpr uint32_t kLogo3 = 28;
 
-// A song that starts with its level.
+// A song that starts with its level. A song of several levels plays as the first of them plays it. The table gives
+// circuit5 and circuit9 a volume of 0x80, and circuit0 and mooshu1 0x60. Those two levels play the song of circuit5
+// 5 dB quieter than its track.
 struct LevelSong
 {
     uint32_t level;

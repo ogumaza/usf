@@ -41,7 +41,7 @@
 #include "xsflib/files.h"
 #include "xsflib/wav.h"
 
-#include "n64/system.h"
+#include "ultralib/machine/system.h"
 #include "usf/track.h"
 #include "usf/usf_file.h"
 
@@ -51,19 +51,19 @@ namespace
 // A WAV file's sizes are 32-bit. The RIFF size counts 36 bytes of headers besides the audio.
 constexpr uint64_t kMaxWavDataBytes = 0xFFFFFFFFu - 36;
 
-const char* CicName(usf::n64::Cic cic)
+const char* CicName(ultralib::machine::Cic cic)
 {
     switch (cic)
     {
-    case usf::n64::Cic::k6102:
+    case ultralib::machine::Cic::k6102:
         return "6102";
-    case usf::n64::Cic::k6103:
+    case ultralib::machine::Cic::k6103:
         return "6103";
-    case usf::n64::Cic::k6105:
+    case ultralib::machine::Cic::k6105:
         return "6105";
-    case usf::n64::Cic::k6106:
+    case ultralib::machine::Cic::k6106:
         return "6106";
-    case usf::n64::Cic::k5101:
+    case ultralib::machine::Cic::k5101:
         return "5101";
     default:
         return "unknown";
@@ -82,7 +82,7 @@ int Usage()
 }
 
 // Parses F:B[:X:Y] for --input.
-std::optional<usf::n64::InputEvent> ParseInput(const std::string& text)
+std::optional<ultralib::machine::InputEvent> ParseInput(const std::string& text)
 {
     unsigned long long field = 0;
     unsigned buttons = 0;
@@ -94,8 +94,8 @@ std::optional<usf::n64::InputEvent> ParseInput(const std::string& text)
         return std::nullopt;
     }
 
-    usf::n64::InputEvent event;
-    event.clock = usf::n64::InputEvent::Clock::kFields;
+    ultralib::machine::InputEvent event;
+    event.clock = ultralib::machine::InputEvent::Clock::kFields;
     event.at = field;
     event.state.buttons = static_cast<uint16_t>(buttons);
     event.state.stick_x = static_cast<int8_t>(x);
@@ -105,7 +105,7 @@ std::optional<usf::n64::InputEvent> ParseInput(const std::string& text)
 }
 
 // Parses F:S:Y[:R] for --board-input.
-std::optional<usf::n64::BoardInputEvent> ParseBoardInput(const std::string& text)
+std::optional<ultralib::machine::BoardInputEvent> ParseBoardInput(const std::string& text)
 {
     unsigned long long field = 0;
     unsigned switches = 0;
@@ -117,7 +117,7 @@ std::optional<usf::n64::BoardInputEvent> ParseBoardInput(const std::string& text
         return std::nullopt;
     }
 
-    usf::n64::BoardInputEvent event;
+    ultralib::machine::BoardInputEvent event;
     event.field = field;
     event.inputs.switches = switches;
     event.inputs.system = system;
@@ -137,45 +137,45 @@ struct Arguments
     std::string wav_path;
     std::string pif_path;
     std::string rom_path;
-    usf::n64::Options options;
-    std::array<bool, usf::n64::Pif::kPorts> controllers{};
-    std::vector<usf::n64::BoardInputEvent> board_inputs;
-    usf::n64::EepromType eeprom = usf::n64::EepromType::kNone;
-    std::vector<usf::n64::InputEvent> inputs;
+    ultralib::machine::Options options;
+    std::array<bool, ultralib::machine::Pif::kPorts> controllers{};
+    std::vector<ultralib::machine::BoardInputEvent> board_inputs;
+    ultralib::machine::EepromType eeprom = ultralib::machine::EepromType::kNone;
+    std::vector<ultralib::machine::InputEvent> inputs;
 
     // The options of the boot that the command line gives. A track takes none of them.
     std::vector<std::string> boot_options;
 };
 
 // Parses the name of a board for --board.
-std::optional<usf::n64::Board> ParseBoard(const std::string& text)
+std::optional<ultralib::machine::Board> ParseBoard(const std::string& text)
 {
     if (text == "console")
     {
-        return usf::n64::Board::kConsole;
+        return ultralib::machine::Board::kConsole;
     }
     if (text == "aleck64")
     {
-        return usf::n64::Board::kAleck64;
+        return ultralib::machine::Board::kAleck64;
     }
     if (text == "aleck64-e90")
     {
-        return usf::n64::Board::kAleck64E90;
+        return ultralib::machine::Board::kAleck64E90;
     }
 
     return std::nullopt;
 }
 
 // Parses the size of an EEPROM for --eeprom.
-std::optional<usf::n64::EepromType> ParseEeprom(const std::string& text)
+std::optional<ultralib::machine::EepromType> ParseEeprom(const std::string& text)
 {
     if (text == "4k")
     {
-        return usf::n64::EepromType::k4Kbit;
+        return ultralib::machine::EepromType::k4Kbit;
     }
     if (text == "16k")
     {
-        return usf::n64::EepromType::k16Kbit;
+        return ultralib::machine::EepromType::k16Kbit;
     }
 
     return std::nullopt;
@@ -194,7 +194,7 @@ bool ParseBootOption(int argc, char** argv, int& i, Arguments& args, int& port, 
     }
     else if (arg == "--legacy")
     {
-        args.options.timing = usf::n64::Timing::kLegacy;
+        args.options.timing = ultralib::machine::Timing::kLegacy;
     }
     else if (arg == "--8mb")
     {
@@ -211,14 +211,14 @@ bool ParseBootOption(int argc, char** argv, int& i, Arguments& args, int& port, 
     else if (arg == "--port" && has_value)
     {
         port = std::atoi(argv[++i]) - 1;
-        if (port < 0 || port >= usf::n64::Pif::kPorts)
+        if (port < 0 || port >= ultralib::machine::Pif::kPorts)
         {
             return false;
         }
     }
     else if (arg == "--board" && has_value)
     {
-        const std::optional<usf::n64::Board> board = ParseBoard(argv[++i]);
+        const std::optional<ultralib::machine::Board> board = ParseBoard(argv[++i]);
         if (!board)
         {
             return false;
@@ -228,7 +228,7 @@ bool ParseBootOption(int argc, char** argv, int& i, Arguments& args, int& port, 
     }
     else if (arg == "--board-input" && has_value)
     {
-        const std::optional<usf::n64::BoardInputEvent> event = ParseBoardInput(argv[++i]);
+        const std::optional<ultralib::machine::BoardInputEvent> event = ParseBoardInput(argv[++i]);
         if (!event)
         {
             return false;
@@ -238,7 +238,7 @@ bool ParseBootOption(int argc, char** argv, int& i, Arguments& args, int& port, 
     }
     else if (arg == "--eeprom" && has_value)
     {
-        const std::optional<usf::n64::EepromType> eeprom = ParseEeprom(argv[++i]);
+        const std::optional<ultralib::machine::EepromType> eeprom = ParseEeprom(argv[++i]);
         if (!eeprom)
         {
             return false;
@@ -248,7 +248,7 @@ bool ParseBootOption(int argc, char** argv, int& i, Arguments& args, int& port, 
     }
     else if (arg == "--input" && has_value)
     {
-        const std::optional<usf::n64::InputEvent> event = ParseInput(argv[++i]);
+        const std::optional<ultralib::machine::InputEvent> event = ParseInput(argv[++i]);
         if (!event)
         {
             return false;
@@ -303,9 +303,9 @@ bool ParseArguments(int argc, char** argv, Arguments& args)
     }
 
     // The RDRAM size follows the last --board. The Aleck64 has 8 MiB.
-    if (rdram_8mb || args.options.board != usf::n64::Board::kConsole)
+    if (rdram_8mb || args.options.board != ultralib::machine::Board::kConsole)
     {
-        args.options.rdram_size = usf::n64::kRdramSize8;
+        args.options.rdram_size = ultralib::machine::kRdramSize8;
     }
 
     return !args.rom_path.empty();
@@ -313,16 +313,16 @@ bool ParseArguments(int argc, char** argv, Arguments& args)
 
 // Loads the ROM into `system` and connects the controllers, the board's inputs, the EEPROM, the input script and the
 // PIF ROM that `args` gives. Returns false after printing why it can't.
-bool SetUpSystem(usf::n64::System& system, std::vector<uint8_t> rom, const Arguments& args)
+bool SetUpSystem(ultralib::machine::System& system, std::vector<uint8_t> rom, const Arguments& args)
 {
     system.LoadRom(std::move(rom));
 
-    for (int p = 0; p < usf::n64::Pif::kPorts; p++)
+    for (int p = 0; p < ultralib::machine::Pif::kPorts; p++)
     {
         system.GetPif().ConnectController(p, args.controllers[static_cast<size_t>(p)]);
     }
 
-    for (const usf::n64::BoardInputEvent& event : args.board_inputs)
+    for (const ultralib::machine::BoardInputEvent& event : args.board_inputs)
     {
         if (event.field == 0)
         {
@@ -336,7 +336,7 @@ bool SetUpSystem(usf::n64::System& system, std::vector<uint8_t> rom, const Argum
 
     system.GetPif().SetEeprom(args.eeprom);
 
-    for (const usf::n64::InputEvent& event : args.inputs)
+    for (const ultralib::machine::InputEvent& event : args.inputs)
     {
         system.GetPif().AddInput(event);
     }
@@ -369,9 +369,9 @@ struct Audio
 
 // Records the buffers that `system` plays in `audio`. The run stops where its samples would pass what a WAV file can
 // hold.
-void RecordAudio(usf::n64::System& system, Audio& audio)
+void RecordAudio(ultralib::machine::System& system, Audio& audio)
 {
-    const auto on_buffer = [&system, &audio](const usf::n64::AudioBuffer& buffer)
+    const auto on_buffer = [&system, &audio](const ultralib::machine::AudioBuffer& buffer)
     {
         if (audio.rate == 0)
         {
@@ -442,7 +442,7 @@ std::optional<int> LoadTrack(Arguments& args, usf::LoadedUsf& loaded)
 
 // Starts the track in `loaded`, or boots the ROM when `track` is false, and prints a line about it. Returns false for a
 // boot that failed.
-bool Start(usf::n64::System& system, bool track, const usf::LoadedUsf& loaded)
+bool Start(ultralib::machine::System& system, bool track, const usf::LoadedUsf& loaded)
 {
     if (track)
     {
@@ -454,7 +454,7 @@ bool Start(usf::n64::System& system, bool track, const usf::LoadedUsf& loaded)
         return true;
     }
 
-    const usf::n64::BootInfo boot = system.Boot();
+    const ultralib::machine::BootInfo boot = system.Boot();
     std::printf("boot: %s, CIC %s, entry 0x%08llX, after %.3f s\n", boot.booted ? "reached the entry point" : "failed",
                 CicName(boot.cic), static_cast<unsigned long long>(boot.entry_point & 0xFFFFFFFF),
                 static_cast<double>(system.Now()) / static_cast<double>(system.TicksPerSecond()));
@@ -494,7 +494,7 @@ int main(int argc, char** argv)
         }
     }
 
-    usf::n64::System system(args.options);
+    ultralib::machine::System system(args.options);
     if (!SetUpSystem(system, std::move(rom), args))
     {
         return 1;

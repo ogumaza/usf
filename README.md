@@ -173,10 +173,10 @@ As above, the results go next to the files.
 
 ## Building
 
-You need Git, CMake 3.20 or later, and C and C++20 compilers. usf builds on xsflib, a library for players and rippers
-of the PSF family, which the repository includes as a submodule in `externals/xsflib`. Clone with
-`git clone --recursive`, or run `git submodule update --init --recursive` in a clone. zlib and libFLAC are downloaded
-and built along with usf when they aren't installed.
+You need Git, CMake 3.20 or later, and C and C++20 compilers. usf builds on xsflib, a library for players and rippers of
+the PSF family, and on ultralib, a library for the Nintendo 64. The repository includes them as submodules in
+`externals/xsflib` and `externals/ultralib`. Clone with `git clone --recursive`, or run `git submodule update --init
+--recursive` in a clone. zlib and libFLAC are downloaded and built along with usf when they aren't installed.
 
 - **Windows:** Visual Studio 2022 or later with the "Desktop development with C++" workload and its "C++ Clang tools for
   Windows" component. The workload includes CMake. The component adds clang-cl. Configure with
@@ -205,7 +205,8 @@ them: `plugins/foobar2000/README.md` and `plugins/xmplay/README.md`.
 
 ## The emulator core
 
-`src/n64` emulates what the sound of a game uses:
+The emulator core is `ultralib::machine`, from ultralib, a library for the Nintendo 64 that the repository includes as a
+submodule in `externals/ultralib`. It emulates what the sound of a game uses:
 
 - the VR4300 CPU: MIPS III with 64-bit registers, COP0 with the TLB and exceptions, and the FPU with its four rounding
   modes, its exception flags and the FR bit
@@ -225,10 +226,10 @@ them: `plugins/foobar2000/README.md` and `plugins/xmplay/README.md`.
 
 Time runs at the hardware rates by default. An option switches to the Count model of the legacy players.
 
-`usf::n64::System` (`src/n64/system.h`) is the API. A ripper loads a ROM with `LoadRom`, boots it with `Boot`, runs it
-with `Run` or `RunSeconds`, stops it at breakpoints, reads and writes memory and registers, patches the ROM, turns
-coverage on with `SetCoverage`, and saves a snapshot with `SaveState` once `CheckQuiet` reports a quiet moment.
-`GetPif` connects controllers and an EEPROM, and accepts a script of controller input by video field or by time.
+`ultralib::machine::System` (`ultralib/machine/system.h`) is the API. A ripper loads a ROM with `LoadRom`, boots it with
+`Boot`, runs it with `Run` or `RunSeconds`, stops it at breakpoints, reads and writes memory and registers, patches the
+ROM, turns coverage on with `SetCoverage`, and saves a snapshot with `SaveState` once `CheckQuiet` reports a quiet
+moment. `GetPif` connects controllers and an EEPROM, and accepts a script of controller input by video field or by time.
 `SetPifRom` sets the dump of the PIF ROM.
 
 `n64run` boots a cartridge image, runs it, and writes what its audio interface plays to a WAV file:
@@ -252,29 +253,15 @@ build/n64run --seconds 60 --wav out.wav "0001 Title.miniusf"
 
 ## Tests
 
-`ctest` runs the unit tests of the core, the loader, the ripper and the player. They use no game data.
+`ctest` runs the unit tests of the loader, the ripper and the player. They use no game data.
 `tests/test_set.cpp` writes USF sets made from small programs. The programs send a known ramp to the audio interface
 at a chosen rate, with a chosen load on the CPU and the RSP. `tests/front_end_test.cpp` runs the loader and the
 playback framework on those sets. `usf_make_test_set` writes such a set to a folder. Its track `01 Heavy` puts more
 load on the emulator than any real track measured. The test `usfplay_test_set` plays that set through `usfplay`.
 
-The tests of the CPU, the FPU, the RSP and the devices also run two suites of test ROMs, which aren't in the
-repository: [n64-systemtest](https://github.com/lemmy-64/n64-systemtest) (MIT) and
-[PeterLemon's N64 tests](https://github.com/PeterLemon/N64) (Unlicense). Put them in a folder: the ROM of
-n64-systemtest as `n64-systemtest.z64`, and the `CPUTest` and `RSPTest` folders of the PeterLemon repository under
-`PeterLemon/`, with their ROMs and fonts. Then configure with `-DUSF_TEST_ROMS=<folder>`, and CTest runs each ROM.
-
-n64-systemtest passes when none of its tests fails outside three areas that the core doesn't cover. The RDP doesn't
-draw. The core has no caches. It doesn't reverse the byte order in user mode when the RE bit of the Status register
-is set. Games run in kernel mode, so none of them depends on that.
-
-A PeterLemon test passes when its frame shows PASS and no FAIL. Some of the tests draw values but no verdict. Their
-frames are compared with the screenshots in the repository of the tests. `tests/test_roms.cmake` lists the tests that
-are left out, and why.
-
-With `USF_FRAME=<file>` set, the runner writes the frame of a PeterLemon test to that file as a PPM image. With
-`USF_TRACE` set, it prints the first 64 exceptions other than interrupts that the CPU takes, and where it found each
-verdict.
+The emulator core's unit tests come from ultralib, and usf's `ctest` runs them with the others. To run the core on the
+n64-systemtest and PeterLemon test ROMs as well, set `ULTRALIB_TEST_ROMS` to the folder that holds them. ultralib's
+README describes that folder.
 
 ## Known gaps
 
@@ -297,11 +284,11 @@ verdict.
 ## Layout
 
 ```
-src/n64/             the emulator core
 src/usf/             the USF loader and the player
 src/rip/             the ripper, and the game profiles in src/rip/games
 src/tools/           usfrip, usfplay and n64run
 externals/xsflib/    a library for players and rippers of the PSF family
+externals/ultralib/  a library for the Nintendo 64, with the emulator core
 plugins/foobar2000/  the foobar2000 component
 plugins/xmplay/      the XMPlay plugin
 docs/release-notes/  the notes of each release
@@ -310,8 +297,8 @@ tests/               the CTest suites
 
 ## Licence
 
-usf is under the MIT licence (`LICENSE`). The vector unit of the RSP (`src/n64/rsp_vector.cpp` and
-`src/n64/rsp_vector.h`) is adapted from [Iconoclast's RSP](https://github.com/mupen64plus/mupen64plus-rsp-cxd4)
-(mupen64plus-rsp-cxd4), which Iconoclast dedicated to the public domain under CC0 1.0. `THIRD-PARTY-NOTICES.md` lists
-the libraries and code that usf uses, and what a binary distribution must include. This licence doesn't cover game
-data. Rips contain the code and sound data of a game and are for personal use.
+usf is under the MIT licence (`LICENSE`). The vector unit of the RSP in the emulator core (in ultralib) is adapted from
+[Iconoclast's RSP](https://github.com/mupen64plus/mupen64plus-rsp-cxd4) (mupen64plus-rsp-cxd4), which Iconoclast
+dedicated to the public domain under CC0 1.0. `THIRD-PARTY-NOTICES.md` lists the libraries and code that usf uses, and
+what a binary distribution must include. This licence doesn't cover game data. Rips contain the code and sound data of a
+game and are for personal use.

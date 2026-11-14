@@ -33,7 +33,7 @@
 #include "xsflib/player/player.h"
 #include "xsflib/psf/psf.h"
 
-#include "n64/system.h"
+#include "ultralib/machine/system.h"
 #include "usf/track.h"
 #include "usf/usf_file.h"
 
@@ -96,7 +96,7 @@ private:
     void AddSamples(std::span<const int16_t> samples, uint32_t rate);
     void DropPastRates(uint64_t frame);
 
-    std::unique_ptr<n64::System> system_;
+    std::unique_ptr<ultralib::machine::System> system_;
     std::vector<int16_t> samples_;
     std::vector<RateChange> rates_; // The rate of the next frame, then any changes after it.
     OutputClock clock_;

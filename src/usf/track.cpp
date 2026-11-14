@@ -8,18 +8,18 @@
 
 #include "xsflib/bytes.h"
 
-#include "n64/save_state.h"
+#include "ultralib/machine/save_state.h"
 
 namespace usf
 {
 
-n64::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, bool enable_fifo_full)
+ultralib::machine::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, bool enable_fifo_full)
 {
-    n64::Options options;
-    options.timing = n64::Timing::kLegacy;
-    options.rdram_size = state.size() >= n64::kStateRdramSizeOffset + 4
-                             ? xsflib::LoadLe32(state.data() + n64::kStateRdramSizeOffset)
-                             : n64::kRdramSize4;
+    ultralib::machine::Options options;
+    options.timing = ultralib::machine::Timing::kLegacy;
+    options.rdram_size = state.size() >= ultralib::machine::kStateRdramSizeOffset + 4
+                             ? xsflib::LoadLe32(state.data() + ultralib::machine::kStateRdramSizeOffset)
+                             : ultralib::machine::kRdramSize4;
     options.timer_interrupt = enable_compare;
     options.ai_delay = enable_fifo_full;
     options.rcp_delays = enable_compare && enable_fifo_full;
@@ -29,12 +29,12 @@ n64::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, b
     return options;
 }
 
-n64::Options TrackOptions(const LoadedUsf& track)
+ultralib::machine::Options TrackOptions(const LoadedUsf& track)
 {
     return TrackOptions(track.state, track.enable_compare, track.enable_fifo_full);
 }
 
-void StartTrack(n64::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state)
+void StartTrack(ultralib::machine::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state)
 {
     system.LoadRomImage(std::vector<uint8_t>(rom.begin(), rom.end()));
     system.LoadState(state);

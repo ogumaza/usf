@@ -40,6 +40,7 @@
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 #include "rip/mips.h"
 
 namespace usf::rip::games
@@ -105,7 +106,9 @@ struct Piece
     uint32_t volume;  // Player 1's volume, or 0 for the sequence's.
     uint32_t variant; // Tells apart the tracks of one sequence.
     Place place;
-    const char* name;
+
+    // The state that the track plays, added to the sequence name. Null for none.
+    const char* detail;
 };
 
 // Each mini that needs the levels' rules puts Mario in one place, which picks its arrangement. At the snapshot, Mario
@@ -126,59 +129,60 @@ struct Piece
 // The set-ups follow the levels' scripts. The jingles and the cap and event music play in the set-up of whatever level
 // the player is in. Those tracks use set-up 0, the set-up of most levels, unless they play in one place only. Set-ups 5
 // and 6 have the reverbs of 0 and 1, so 0 and 1 also stand for the levels with set-ups 5 and 6.
+// The names of the sequences with no name in ultralib's table.
+constexpr SongName kSetSongNames[] = {
+    {0x05, "water levels"},
+    {0x0A, "Big Boo's Haunt"},
+    {0x0C, "underground levels"},
+};
+
 // clang-format off
 const Piece kPieces[] = {
-    {0x01, 0, true,  0,  0, {}, "Sequence 0x01: star collected"},
-    {0x02, 0, false, 0,  0, {}, "Sequence 0x02: title screen"},
-    {0x02 | kVariation, 0, false, 0, 0, {}, "Sequence 0x02: title screen, with the variation, after a game over"},
-    {0x03, 0, false, 0,  0, {}, "Sequence 0x03: grass levels"},
-    {0x04, 1, false, 0,  0, {}, "Sequence 0x04: inside the castle"},
-    {0x05, 3, false, 0,  0, {.level = kLevelDireDireDocks, .area = 1},
-     "Sequence 0x05: water levels, without channels 0, 1, 6, 9, 10 and 11"},
-    {0x05, 3, false, 0,  1, {.level = kLevelDireDireDocks, .area = 2},
-     "Sequence 0x05: water levels, without channels 6, 9, 10 and 11"},
-    {0x05, 3, false, 0,  2, {.level = kLevelDireDireDocks, .area = 2, .height = kHeight100},
-     "Sequence 0x05: water levels, all channels"},
-    {0x05 | kVariation, 3, false, 0, 0, {}, "Sequence 0x05: water levels, with the variation, in the Secret Aquarium"},
-    {0x06, 0, false, 0,  0, {}, "Sequence 0x06: hot levels"},
-    {0x06, 4, false, 0,  1, {}, "Sequence 0x06: hot levels, inside the volcano"},
-    {0x07, 2, false, 0,  0, {}, "Sequence 0x07: Bowser's battles"},
-    {0x08, 0, false, 0,  0, {}, "Sequence 0x08: snow levels"},
-    {0x09, 1, false, 0,  0, {}, "Sequence 0x09: slides"},
-    {0x09, 0, false, 0,  1, {}, "Sequence 0x09: slides, in Rainbow Ride and three secret courses"},
-    {0x0A, 6, false, 0,  0, {.level = kLevelBigBoosHaunt}, "Sequence 0x0A: Big Boo's Haunt, indoors"},
-    {0x0A, 6, false, 0,  1, {.level = kLevelBigBoosHaunt, .room = 13}, "Sequence 0x0A: Big Boo's Haunt, outdoors"},
-    {0x0B, 0, true,  0,  0, {}, "Sequence 0x0B: piranha plant's lullaby"},
-    {0x0C, 4, false, 0,  0, {}, "Sequence 0x0C: underground levels, all channels"},
-    {0x0C, 4, false, 0,  1, {.level = kLevelHazyMazeCave}, "Sequence 0x0C: underground levels, without channel 8"},
-    {0x0C, 4, false, 0,  2, {.level = kLevelHazyMazeCave, .height = kHeightMinus300},
-     "Sequence 0x0C: underground levels, without channel 3"},
-    {0x0C, 3, false, 0,  3, {.level = kLevelWetDryWorld, .area = 1},
-     "Sequence 0x0C: underground levels, without channel 8, in Wet-Dry World"},
-    {0x0C, 3, false, 0,  4, {.level = kLevelWetDryWorld, .area = 2},
-     "Sequence 0x0C: underground levels, without channel 3, in Wet-Dry World"},
-    {0x0D, 0, false, 0,  0, {}, "Sequence 0x0D: star select"},
-    {0x0E, 0, false, 0,  0, {}, "Sequence 0x0E: wing cap"},
-    {0x0F, 0, false, 0,  0, {}, "Sequence 0x0F: metal cap"},
-    {0x10, 0, true,  0,  0, {}, "Sequence 0x10: Bowser's message"},
-    {0x11, 0, false, 0,  0, {}, "Sequence 0x11: Bowser's roads"},
-    {0x12, 0, true,  0,  0, {}, "Sequence 0x12: high score"},
-    {0x13, 6, true,  78, 0, {}, "Sequence 0x13: merry-go-round"},
-    {0x14, 0, true,  0,  0, {}, "Sequence 0x14: race fanfare"},
-    {0x15, 0, true,  0,  0, {}, "Sequence 0x15: star appears"},
-    {0x16, 0, false, 0,  0, {}, "Sequence 0x16: boss"},
-    {0x17, 2, true,  0,  0, {}, "Sequence 0x17: key collected"},
-    {0x18, 1, true,  0,  0, {}, "Sequence 0x18: endless stairs"},
-    {0x19, 2, false, 0,  0, {}, "Sequence 0x19: final battle"},
-    {0x1A, 7, false, 0,  0, {}, "Sequence 0x1A: credits"},
-    {0x1B, 0, true,  0,  0, {}, "Sequence 0x1B: puzzle solved"},
-    {0x1C, 1, true,  0,  0, {}, "Sequence 0x1C: Toad's message"},
-    {0x1D, 0, false, 0,  0, {}, "Sequence 0x1D: Peach's message"},
-    {0x1E, 0, false, 0,  0, {}, "Sequence 0x1E: intro"},
-    {0x1F, 2, false, 0,  0, {}, "Sequence 0x1F: Grand Star collected"},
-    {0x20, 0, false, 0,  0, {}, "Sequence 0x20: ending"},
-    {0x21, 0, false, 0,  0, {}, "Sequence 0x21: file select"},
-    {0x22, 0, false, 0,  0, {}, "Sequence 0x22: Lakitu's message"},
+    {0x01, 0, true,  0,  0, {}, nullptr},
+    {0x02, 0, false, 0,  0, {}, nullptr},
+    {0x02 | kVariation, 0, false, 0, 0, {}, "with the variation, after a game over"},
+    {0x03, 0, false, 0,  0, {}, nullptr},
+    {0x04, 1, false, 0,  0, {}, nullptr},
+    {0x05, 3, false, 0,  0, {.level = kLevelDireDireDocks, .area = 1}, "without channels 0, 1, 6, 9, 10 and 11"},
+    {0x05, 3, false, 0,  1, {.level = kLevelDireDireDocks, .area = 2}, "without channels 6, 9, 10 and 11"},
+    {0x05, 3, false, 0,  2, {.level = kLevelDireDireDocks, .area = 2, .height = kHeight100}, "all channels"},
+    {0x05 | kVariation, 3, false, 0, 0, {}, "with the variation, in the Secret Aquarium"},
+    {0x06, 0, false, 0,  0, {}, nullptr},
+    {0x06, 4, false, 0,  1, {}, "inside the volcano"},
+    {0x07, 2, false, 0,  0, {}, nullptr},
+    {0x08, 0, false, 0,  0, {}, nullptr},
+    {0x09, 1, false, 0,  0, {}, nullptr},
+    {0x09, 0, false, 0,  1, {}, "in Rainbow Ride and three secret courses"},
+    {0x0A, 6, false, 0,  0, {.level = kLevelBigBoosHaunt}, "indoors"},
+    {0x0A, 6, false, 0,  1, {.level = kLevelBigBoosHaunt, .room = 13}, "outdoors"},
+    {0x0B, 0, true,  0,  0, {}, nullptr},
+    {0x0C, 4, false, 0,  0, {}, "all channels"},
+    {0x0C, 4, false, 0,  1, {.level = kLevelHazyMazeCave}, "without channel 8"},
+    {0x0C, 4, false, 0,  2, {.level = kLevelHazyMazeCave, .height = kHeightMinus300}, "without channel 3"},
+    {0x0C, 3, false, 0,  3, {.level = kLevelWetDryWorld, .area = 1}, "without channel 8, in Wet-Dry World"},
+    {0x0C, 3, false, 0,  4, {.level = kLevelWetDryWorld, .area = 2}, "without channel 3, in Wet-Dry World"},
+    {0x0D, 0, false, 0,  0, {}, nullptr},
+    {0x0E, 0, false, 0,  0, {}, nullptr},
+    {0x0F, 0, false, 0,  0, {}, nullptr},
+    {0x10, 0, true,  0,  0, {}, nullptr},
+    {0x11, 0, false, 0,  0, {}, nullptr},
+    {0x12, 0, true,  0,  0, {}, nullptr},
+    {0x13, 6, true,  78, 0, {}, nullptr},
+    {0x14, 0, true,  0,  0, {}, nullptr},
+    {0x15, 0, true,  0,  0, {}, nullptr},
+    {0x16, 0, false, 0,  0, {}, nullptr},
+    {0x17, 2, true,  0,  0, {}, nullptr},
+    {0x18, 1, true,  0,  0, {}, nullptr},
+    {0x19, 2, false, 0,  0, {}, nullptr},
+    {0x1A, 7, false, 0,  0, {}, nullptr},
+    {0x1B, 0, true,  0,  0, {}, nullptr},
+    {0x1C, 1, true,  0,  0, {}, nullptr},
+    {0x1D, 0, false, 0,  0, {}, nullptr},
+    {0x1E, 0, false, 0,  0, {}, nullptr},
+    {0x1F, 2, false, 0,  0, {}, nullptr},
+    {0x20, 0, false, 0,  0, {}, nullptr},
+    {0x21, 0, false, 0,  0, {}, nullptr},
+    {0x22, 0, false, 0,  0, {}, nullptr},
 };
 // clang-format on
 
@@ -234,7 +238,7 @@ GameProfile NusNsmeUsaMusic()
     profile.sha1 = "9bef1128717f958171a4afac3ed78ee2bb4e86ce";
     profile.set = "music";
     profile.year = "1996";
-    profile.cic = n64::Cic::k6102;
+    profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
 
     // The driver takes over the game thread at the first return from the sound reset, as in the sound effects' profile.
@@ -291,7 +295,10 @@ GameProfile NusNsmeUsaMusic()
     {
         Track track;
         track.number = TrackNumber(piece);
-        track.name = piece.name;
+        const uint32_t sequence = piece.sequence & ~kVariation;
+        track.name =
+            SongTitle("Sequence", sequence, TitleBase::kHex,
+                      FindSongName(kSetSongNames, ultralib::n64::kSuperMario64SongNames, sequence), piece.detail);
         track.rdram_patches = PlacePatches(piece.place);
         profile.tracks.push_back(track);
     }

@@ -48,11 +48,15 @@
 // Sequence 0x02 picks each part of Hyrule Field's music as it plays. It has no loop, so the length analysis stops it at
 // its limit of 10 minutes.
 
+#include <algorithm>
+#include <cstdint>
+#include <iterator>
 #include <string>
 #include <vector>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 #include "rip/mips.h"
 
 namespace usf::rip::games
@@ -82,120 +86,16 @@ constexpr RetraceClient kRetraceClient = {
     .address = kDriverAddress + 0xC00, .create_queue = 0x800043E0, .add_client = 0x800AD460, .manager = 0x8011E038};
 constexpr uint32_t kRecvMesg = 0x800021F0;
 
-struct Title
-{
-    uint32_t number;
-    const char* name;
-};
+// The sequences that hold ambience and cutscene effects. The set leaves them out.
+constexpr uint32_t kEffectSequences[] = {0x01, 0x6D};
 
-constexpr Title kTitles[] = {
-    {0x02, "Sequence 0x02: Hyrule Field"},
-    {0x03, "Sequence 0x03: Hyrule Field, opening"},
-    {0x04, "Sequence 0x04: Hyrule Field, part 1"},
-    {0x05, "Sequence 0x05: Hyrule Field, part 2"},
-    {0x06, "Sequence 0x06: Hyrule Field, part 3"},
-    {0x07, "Sequence 0x07: Hyrule Field, part 4"},
-    {0x08, "Sequence 0x08: Hyrule Field, part 5"},
-    {0x09, "Sequence 0x09: Hyrule Field, part 6"},
-    {0x0A, "Sequence 0x0A: Hyrule Field, part 7"},
-    {0x0B, "Sequence 0x0B: Hyrule Field, part 8"},
-    {0x0C, "Sequence 0x0C: Hyrule Field, part 9"},
-    {0x0D, "Sequence 0x0D: Hyrule Field, part 10"},
-    {0x0E, "Sequence 0x0E: Hyrule Field, part 11"},
-    {0x0F, "Sequence 0x0F: Hyrule Field, enemies near, opening"},
-    {0x10, "Sequence 0x10: Hyrule Field, enemies near, part 1"},
-    {0x11, "Sequence 0x11: Hyrule Field, enemies near, part 2"},
-    {0x12, "Sequence 0x12: Hyrule Field, enemies near, part 3"},
-    {0x13, "Sequence 0x13: Hyrule Field, enemies near, part 4"},
-    {0x14, "Sequence 0x14: Hyrule Field, standing still, part 1"},
-    {0x15, "Sequence 0x15: Hyrule Field, standing still, part 2"},
-    {0x16, "Sequence 0x16: Hyrule Field, standing still, part 3"},
-    {0x17, "Sequence 0x17: Hyrule Field, standing still, part 4"},
-    {0x18, "Sequence 0x18: Dodongo's Cavern and other caves"},
-    {0x19, "Sequence 0x19: Kakariko Village, as an adult"},
-    {0x1A, "Sequence 0x1A: battle"},
-    {0x1B, "Sequence 0x1B: boss battle"},
-    {0x1C, "Sequence 0x1C: Inside the Deku Tree"},
-    {0x1D, "Sequence 0x1D: Market"},
-    {0x1E, "Sequence 0x1E: title screen"},
-    {0x1F, "Sequence 0x1F: houses"},
-    {0x20, "Sequence 0x20: game over"},
-    {0x21, "Sequence 0x21: boss defeated"},
-    {0x22, "Sequence 0x22: item found"},
-    {0x23, "Sequence 0x23: Ganondorf appears"},
-    {0x24, "Sequence 0x24: Heart Container found"},
-    {0x25, "Sequence 0x25: Prelude of Light"},
-    {0x26, "Sequence 0x26: Inside Jabu-Jabu's Belly"},
-    {0x27, "Sequence 0x27: Kakariko Village, as a child"},
-    {0x28, "Sequence 0x28: Great Fairy's Fountain"},
-    {0x29, "Sequence 0x29: Castle Courtyard, Zelda"},
-    {0x2A, "Sequence 0x2A: Fire Temple"},
-    {0x2B, "Sequence 0x2B: treasure chest opens"},
-    {0x2C, "Sequence 0x2C: Forest Temple"},
-    {0x2D, "Sequence 0x2D: Castle Courtyard, guards"},
-    {0x2E, nullptr}, // A track for each level of Ganon's Tower.
-    {0x2F, "Sequence 0x2F: Lon Lon Ranch"},
-    {0x30, "Sequence 0x30: Goron City"},
-    {0x31, "Sequence 0x31: Hyrule Field, morning"},
-    {0x32, "Sequence 0x32: Spiritual Stone found"},
-    {0x33, "Sequence 0x33: Bolero of Fire"},
-    {0x34, "Sequence 0x34: Minuet of Forest"},
-    {0x35, "Sequence 0x35: Serenade of Water"},
-    {0x36, "Sequence 0x36: Requiem of Spirit"},
-    {0x37, "Sequence 0x37: Nocturne of Shadow"},
-    {0x38, "Sequence 0x38: mini-boss battle"},
-    {0x39, "Sequence 0x39: small item found"},
-    {0x3A, "Sequence 0x3A: Temple of Time"},
-    {0x3B, "Sequence 0x3B: puzzle solved"},
-    {0x3C, "Sequence 0x3C: Kokiri Forest"},
-    {0x3D, "Sequence 0x3D: Fairy Ocarina found"},
-    {0x3E, "Sequence 0x3E: Lost Woods"},
-    {0x3F, "Sequence 0x3F: Spirit Temple"},
-    {0x40, "Sequence 0x40: horse race"},
-    {0x41, "Sequence 0x41: horse race won"},
-    {0x42, "Sequence 0x42: Ingo"},
-    {0x43, "Sequence 0x43: Medallion found"},
-    {0x44, "Sequence 0x44: Saria's Song"},
-    {0x45, "Sequence 0x45: Epona's Song"},
-    {0x46, "Sequence 0x46: Zelda's Lullaby"},
-    {0x47, "Sequence 0x47: Sun's Song"},
-    {0x48, "Sequence 0x48: Song of Time"},
-    {0x49, "Sequence 0x49: Song of Storms"},
-    {0x4A, "Sequence 0x4A: Navi's opening"},
-    {0x4B, "Sequence 0x4B: the Deku Tree speaks"},
-    {0x4C, "Sequence 0x4C: Windmill"},
-    {0x4D, "Sequence 0x4D: the story of Hyrule"},
-    {0x4E, "Sequence 0x4E: mini-games"},
-    {0x4F, "Sequence 0x4F: Sheik"},
-    {0x50, "Sequence 0x50: Zora's Domain"},
-    {0x51, "Sequence 0x51: someone appears"},
-    {0x52, "Sequence 0x52: Link as an adult"},
-    {0x53, "Sequence 0x53: Master Sword"},
-    {0x54, "Sequence 0x54: Ganondorf's introduction"},
-    {0x55, "Sequence 0x55: shops"},
-    {0x56, "Sequence 0x56: Chamber of the Sages"},
-    {0x58, "Sequence 0x58: Ice Cavern"},
-    {0x59, "Sequence 0x59: Door of Time"},
-    {0x5A, "Sequence 0x5A: Kaepora Gaebora"},
-    {0x5B, "Sequence 0x5B: Shadow Temple"},
-    {0x5C, "Sequence 0x5C: Water Temple"},
-    {0x5D, "Sequence 0x5D: bridge to Ganon's Castle"},
-    {0x5E, "Sequence 0x5E: seal of the Sages"},
-    {0x5F, "Sequence 0x5F: Gerudo Valley"},
-    {0x60, "Sequence 0x60: Potion Shop"},
-    {0x61, "Sequence 0x61: Kotake and Koume"},
-    {0x62, "Sequence 0x62: escape from Ganon's Castle"},
-    {0x63, "Sequence 0x63: Inside Ganon's Castle"},
-    {0x64, "Sequence 0x64: Ganondorf battle"},
-    {0x65, "Sequence 0x65: Ganon battle"},
-    {0x66, "Sequence 0x66: Ocarina of Time"},
-    {0x67, "Sequence 0x67: staff roll, part 1"},
-    {0x68, "Sequence 0x68: staff roll, part 2"},
-    {0x69, "Sequence 0x69: staff roll, part 3"},
-    {0x6A, "Sequence 0x6A: staff roll, part 4"},
-    {0x6B, "Sequence 0x6B: Volvagia battle"},
-    {0x6C, "Sequence 0x6C: timed mini-game"},
-};
+// The set names sequence 0x28 after the Great Fairy's Fountain. ultralib's table names the file select too. The file
+// select has a separate track, through sequence 0x57 (kCommandVersions).
+constexpr SongName kSetSongNames[] = {{0x28, "Great Fairy's Fountain"}};
+
+// The set makes a track for each name in ultralib's table. A new name there adds a track. Compare usfrip --list, then
+// update the count.
+static_assert(ultralib::n64::kOcarinaOfTimeSongNames.size() == 108);
 
 // Tracks that play a sequence in a state that the game's code sets after the start. Each track's number is the game's
 // command, which the driver's last call queues. The track's mini turns the call for Ganon's Tower into one that fires
@@ -279,7 +179,7 @@ GameProfile NusCzleUsaRev2()
     profile.serial = "NUS-CZLE-USA-rev2";
     profile.sha1 = "41b3bdc48d98c48529219919015a1af22f5057c2";
     profile.year = "1998";
-    profile.cic = n64::Cic::k6105;
+    profile.cic = ultralib::machine::Cic::k6105;
     profile.sound_driver = "Ocarina of Time sound engine";
     profile.controller = true;
 
@@ -319,9 +219,15 @@ GameProfile NusCzleUsaRev2()
                                     .match_register = mips::kA1,
                                     .match_value = kSequenceScriptState});
 
-    for (const Title& title : kTitles)
+    for (const SongName& song : ultralib::n64::kOcarinaOfTimeSongNames)
     {
-        if (title.number == kGanonsTower)
+        const auto number = static_cast<uint32_t>(song.index);
+        if (std::ranges::find(kEffectSequences, number) != std::end(kEffectSequences))
+        {
+            continue;
+        }
+
+        if (number == kGanonsTower)
         {
             for (uint32_t level = kEntranceLevel + 1; level-- > 0;)
             {
@@ -335,9 +241,10 @@ GameProfile NusCzleUsaRev2()
         }
 
         Track track;
-        track.number = title.number;
-        track.name = title.name;
-        if (title.number == kHyruleFieldMoving.sequence)
+        track.number = number;
+        track.name = SongTitle("Sequence", number, TitleBase::kHex,
+                               FindSongName(kSetSongNames, ultralib::n64::kOcarinaOfTimeSongNames, number));
+        if (number == kHyruleFieldMoving.sequence)
         {
             track.number = kHyruleFieldMoving.command;
             track.rdram_patches = CommandVersionPatches(*profile.driver, kHyruleFieldMoving);

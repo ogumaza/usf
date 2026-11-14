@@ -8,8 +8,8 @@
 #include "xsflib/bytes.h"
 #include "xsflib/psf/set.h"
 
-#include "n64/constants.h"
-#include "n64/save_state.h"
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/save_state.h"
 
 namespace usf
 {
@@ -17,7 +17,7 @@ namespace
 {
 
 constexpr uint8_t kMarker[4] = {'S', 'R', '6', '4'};
-constexpr size_t kMaxStateSize = kStateOverhead + n64::kRdramSize8;
+constexpr size_t kMaxStateSize = kStateOverhead + ultralib::machine::kRdramSize8;
 
 using xsflib::psf::Put32;
 
@@ -97,13 +97,13 @@ public:
         {
             return "the set holds no save state";
         }
-        if (xsflib::LoadLe32(state_.data()) != n64::kStateId)
+        if (xsflib::LoadLe32(state_.data()) != ultralib::machine::kStateId)
         {
             return "the save state's identifier is wrong";
         }
 
-        const uint32_t rdram_size = xsflib::LoadLe32(state_.data() + n64::kStateRdramSizeOffset);
-        if (rdram_size != n64::kRdramSize4 && rdram_size != n64::kRdramSize8)
+        const uint32_t rdram_size = xsflib::LoadLe32(state_.data() + ultralib::machine::kStateRdramSizeOffset);
+        if (rdram_size != ultralib::machine::kRdramSize4 && rdram_size != ultralib::machine::kRdramSize8)
         {
             return "the save state's RDRAM size is neither 4 nor 8 MiB";
         }
@@ -114,7 +114,7 @@ public:
 
         // The ROM section is in LE word order: console byte A is at A XOR 3.
         out_.rom.assign(rom_.size(), 0);
-        n64::CopyFromLeWords(rom_.data(), out_.rom.data(), rom_.size());
+        ultralib::machine::CopyFromLeWords(rom_.data(), out_.rom.data(), rom_.size());
 
         return std::nullopt;
     }

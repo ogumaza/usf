@@ -53,14 +53,9 @@ constexpr SongLength kSongLengths[] = {
 
 GameProfile Aleck64HiPaiParadise()
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64,
-                                         {
-                                             {.sha1 = "e909ea5b71b81087da07821c4f57244576363678", .size = 0x1000000},
-                                             {.sha1 = "7c3e59f6520dc3f0aa592e682fa82e30ffd1f4d0", .size = 0x1000000},
-                                         });
-    profile.game = "Hi Pai Paradise";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "68329c94e1b9342ee60713e9e0945ea2663210c7");
     profile.serial = "Aleck64 Hi Pai Paradise";
-    profile.sha1 = "68329c94e1b9342ee60713e9e0945ea2663210c7";
     profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.switches = kFactorySwitches;

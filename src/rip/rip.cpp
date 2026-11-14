@@ -8,10 +8,10 @@
 
 #include "xsflib/bytes.h"
 
-#include "n64/save_state.h"
-#include "n64/system.h"
 #include "rip/length.h"
 #include "rip/player.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
 #include "usf/usf_file.h"
 
 namespace usf::rip
@@ -146,8 +146,8 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
 
     if (settings.coverage)
     {
-        run.words = WordsOf(*player.System().GetCoverage(), n64::RomImageSize(snapshot.rom.size()),
-                            xsflib::LoadLe32(snapshot.state.data() + n64::kStateRdramSizeOffset));
+        run.words = WordsOf(*player.System().GetCoverage(), ultralib::machine::RomImageSize(snapshot.rom.size()),
+                            xsflib::LoadLe32(snapshot.state.data() + ultralib::machine::kStateRdramSizeOffset));
     }
 
     return run;

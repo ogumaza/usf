@@ -63,13 +63,9 @@ constexpr uint32_t kSystemInputs = 0x0000FFFF;
 
 GameProfile Aleck64MagicalTetrisChallenge()
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64E90,
-                                         {
-                                             {.sha1 = "59932c70b43ff8e9264c670f37b3abbe939b7f95", .size = 0x1000000},
-                                         });
-    profile.game = "Magical Tetris Challenge";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64E90, "7e357995def4078a54ba8e4486f361d631ff3329");
     profile.serial = "Aleck64 Magical Tetris Challenge";
-    profile.sha1 = "7e357995def4078a54ba8e4486f361d631ff3329";
     profile.year = "1998";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.system = kSystemInputs;

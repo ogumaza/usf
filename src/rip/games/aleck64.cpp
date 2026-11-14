@@ -2,24 +2,29 @@
 
 #include "rip/games/aleck64.h"
 
+#include <stdexcept>
+#include <string>
+
+#include "ultralib/machine/rom_set.h"
+
 namespace usf::rip::games
 {
 
-GameProfile Aleck64Profile(n64::Board board, const std::vector<RomChip>& chips)
+GameProfile Aleck64Profile(ultralib::machine::Board board, std::string_view image_sha1)
 {
-    GameProfile profile;
-    profile.board = board;
-    profile.rdram_size = n64::kRdramSize8;
-    profile.cic = n64::Cic::k5101;
-
-    uint32_t offset = 0;
-    for (RomChip chip : chips)
+    const ultralib::machine::Aleck64Set* set = ultralib::machine::FindAleck64Set(image_sha1);
+    if (set == nullptr)
     {
-        chip.offset = offset;
-        chip.byte_swapped = true;
-        offset += chip.size;
-        profile.chips.push_back(chip);
+        throw std::logic_error("ultralib has no Aleck64 set with the image SHA-1 " + std::string(image_sha1));
     }
+
+    GameProfile profile;
+    profile.game = set->name;
+    profile.sha1 = set->image_sha1;
+    profile.chips.assign(set->chips.begin(), set->chips.end());
+    profile.board = board;
+    profile.rdram_size = ultralib::machine::kRdramSize8;
+    profile.cic = ultralib::machine::Cic::k5101;
 
     return profile;
 }

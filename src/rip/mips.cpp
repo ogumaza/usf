@@ -4,7 +4,7 @@
 
 #include <stdexcept>
 
-#include "n64/mips_registers.h"
+#include "ultralib/machine/mips_registers.h"
 
 namespace usf::rip::mips
 {
@@ -174,13 +174,13 @@ void Assembler::Bne(Register rs, Register rt, uint32_t target)
 void Assembler::J(uint32_t target)
 {
     // A jump keeps the top four bits of the delay slot's address.
-    constexpr uint32_t kRegionMask = static_cast<uint32_t>(n64::mips::kJumpRegionMask);
+    constexpr uint32_t kRegionMask = static_cast<uint32_t>(ultralib::machine::mips::kJumpRegionMask);
     if (((Here() + 4) & kRegionMask) != (target & kRegionMask) || (target & 3) != 0)
     {
         throw std::invalid_argument("a jump's target is out of its reach");
     }
 
-    Emit(kOpJ << 26 | ((target >> 2) & n64::mips::kJumpIndexMask));
+    Emit(kOpJ << 26 | ((target >> 2) & ultralib::machine::mips::kJumpIndexMask));
 }
 
 size_t Assembler::Size() const

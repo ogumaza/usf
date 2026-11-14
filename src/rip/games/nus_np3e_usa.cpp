@@ -84,7 +84,7 @@ GameProfile NusNp3eUsa()
     profile.serial = "NUS-NP3E-USA";
     profile.sha1 = "d8343e69a7dc63b869cf6361d87cde64444281d3";
     profile.year = "2001";
-    profile.cic = n64::Cic::k6103;
+    profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = "Zelda sound engine";
     profile.controller = true;
 

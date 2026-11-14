@@ -51,14 +51,10 @@ constexpr uint32_t kSongs = 13;
 // The set of the mode that `stereo` picks.
 GameProfile Aleck64SuperRealMahjongVsSet(bool stereo)
 {
-    GameProfile profile = Aleck64Profile(n64::Board::kAleck64,
-                                         {
-                                             {.sha1 = "a78de955f2fcd99dda14e782984368b320eb5415", .size = 0x2000000},
-                                         });
-    profile.game = "Super Real Mahjong VS";
+    GameProfile profile =
+        Aleck64Profile(ultralib::machine::Board::kAleck64, "a590216a171a61517cd07ff629d8215631c8be87");
     profile.serial = "Aleck64 Super Real Mahjong VS";
     profile.set = stereo ? "stereo" : "mono";
-    profile.sha1 = "a590216a171a61517cd07ff629d8215631c8be87";
     profile.year = "1999";
     profile.sound_driver = kCompressedSequencePlayer;
     profile.board_inputs.switches = kFactorySwitches;

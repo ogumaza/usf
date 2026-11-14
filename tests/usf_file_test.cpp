@@ -16,21 +16,21 @@
 #include "xsflib/testing/check.h"
 #include "xsflib/testing/sets.h"
 
-#include "n64/save_state.h"
-#include "n64/system.h"
-#include "test_programs.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "usf/track.h"
 
 namespace
 {
 
+using ultralib::machine::kRdramSize4;
+using ultralib::machine::kRdramSize8;
+using ultralib::machine::kStateRdramOffset;
+using ultralib::testing::kStateA0;
 using usf::Chunk;
 using usf::LoadedUsf;
 using usf::Sections;
-using usf::n64::kRdramSize4;
-using usf::n64::kRdramSize8;
-using usf::n64::kStateRdramOffset;
-using usf::testing::kStateA0;
 using xsflib::psf::Tags;
 using xsflib::testing::ExactReader;
 
@@ -52,7 +52,7 @@ std::vector<uint8_t> Bytes(std::initializer_list<int> values)
 std::vector<uint8_t> MinimalState()
 {
     std::vector<uint8_t> state(usf::kStateOverhead + kRdramSize4, 0);
-    xsflib::StoreLe32(state.data(), usf::n64::kStateId);
+    xsflib::StoreLe32(state.data(), ultralib::machine::kStateId);
     xsflib::StoreLe32(state.data() + 4, kRdramSize4);
     state[kStateRdramOffset + 0x100] = 0x42;
 
@@ -122,8 +122,8 @@ void ParseReserved()
 // A set written from a ROM and a state loads back as the same images.
 void RoundTrip()
 {
-    usf::n64::System system;
-    std::vector<uint8_t> rom = usf::testing::TestRom(0x1000);
+    ultralib::machine::System system;
+    std::vector<uint8_t> rom = ultralib::testing::TestRom(0x1000);
     for (size_t i = 4; i < rom.size(); i++)
     {
         rom[i] = static_cast<uint8_t>(i * 7 + 3);
@@ -137,7 +137,7 @@ void RoundTrip()
     // The library holds the ROM in LE word order and the whole state. The mini changes a0 and one ROM byte.
     Sections library;
     std::vector<uint8_t> le(rom.size());
-    usf::n64::CopyToLeWords(rom.data(), le.data(), rom.size());
+    ultralib::machine::CopyToLeWords(rom.data(), le.data(), rom.size());
     library.rom = std::vector<Chunk>{{0, le}};
     library.state = std::vector<Chunk>{{0, state}};
     Sections mini;
@@ -240,7 +240,7 @@ std::vector<uint8_t> StateFile(const std::vector<Chunk>& extra)
 // like another byte order.
 void TrackRomKeepsItsOrder()
 {
-    usf::n64::System system;
+    ultralib::machine::System system;
     const std::vector<uint8_t> state = MinimalState();
 
     for (const std::vector<uint8_t>& rom : {Bytes({0x37, 0x80, 0x40, 0x12}), Bytes({0x40, 0x12, 0x37, 0x80})})

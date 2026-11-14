@@ -109,21 +109,11 @@ constexpr Fanfare kFanfares[] = {
     {.effect = 7, .sound = 0x8037AD18, .volume = 0xAF, .seconds = 2.7, .name = "Effect 0x07: fourth place or lower"},
 };
 
-// The titles of the tracks that have a name.
-constexpr NamedNumber kTitles[] = {
-    {0x00, "Song 0x00: title screen"},
-    {0x01, "Song 0x01: menus"},
-    {0x03, "Song 0x03: race results"},
-    {0x04, "Song 0x04: China, Japan"},
-    {0x05, "Song 0x05: Mexico"},
-    {0x06, "Song 0x06: Hawaii, Florida"},
-    {0x07, "Song 0x07: Italy"},
-    {0x08, "Song 0x08: New York, Russia, Australia, Moon (Championship)"},
-    {0x09, "Song 0x09: France, Moon (Cruise)"},
-    {0x0A, "Song 0x0A: England"},
-    {0x0B, "Song 0x0B: Germany"},
-    {0x0C, "Song 0x0C: Egypt"},
-    {0x0D, "Song 0x0D: Kenya"},
+// The set words two song names as earlier rips did. ultralib's table says "Moon in a championship" and "Moon in a
+// cruise".
+constexpr SongName kSetSongNames[] = {
+    {0x08, "New York, Russia, Australia, Moon (Championship)"},
+    {0x09, "France, Moon (Cruise)"},
 };
 
 } // namespace
@@ -135,10 +125,10 @@ GameProfile NusNcweUsa()
     profile.serial = "NUS-NCWE-USA";
     profile.sha1 = "6da1a6a2bda687d50e798d80c342948ad1738202";
     profile.year = "1998";
-    profile.cic = n64::Cic::k6106;
+    profile.cic = ultralib::machine::Cic::k6106;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
-    profile.eeprom = n64::EepromType::k4Kbit;
+    profile.eeprom = ultralib::machine::EepromType::k4Kbit;
 
     // The audio thread keeps a second buffer waiting in the AI whenever the game thread runs, so no point in the game
     // thread is quiet. The snapshot comes in the audio frame instead, during the screens before the title, when no song
@@ -158,7 +148,8 @@ GameProfile NusNcweUsa()
 
     for (uint32_t index = 0; index < kSongs; index++)
     {
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kTitles, "Song", TitleBase::kHex));
+        const char* name = FindSongName(kSetSongNames, ultralib::n64::kCruisnWorldSongNames, index);
+        profile.tracks.push_back(NumberedTrack(index, SongTitle("Song", index, TitleBase::kHex, name)));
     }
 
     for (const Fanfare& fanfare : kFanfares)
