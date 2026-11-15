@@ -655,6 +655,94 @@ void ImageSets()
     XSFLIB_CHECK(usf::rip::FindProfiles("0000000000000000000000000000000000000000").empty());
 }
 
+// Whether Paper Mario's driver, for the track numbered `number` alone, calls `function` with Toad Town's song name and
+// `mix`. The driver loads the track's number into t0 and branches past the call for every other track. It then loads
+// the arguments into a0 and a1 and the function into t9, and calls it.
+bool CallsMix(const std::vector<uint32_t>& code, uint32_t number, uint32_t function, uint32_t mix)
+{
+    constexpr uint32_t kToadTownName = 0x32313020;
+    mips::Assembler head(0);
+    head.LoadImmediate(kT0, number);
+    mips::Assembler tail(0);
+    tail.LoadImmediate(kA0, kToadTownName);
+    tail.LoadImmediate(mips::kA1, mix);
+    tail.LoadImmediate(mips::kT9, function);
+    tail.Emit(mips::Jalr(mips::kRa, mips::kT9));
+
+    // The branch and its delay slot sit between the two parts.
+    const size_t skip = head.Words().size();
+    const size_t size = skip + 2 + tail.Words().size();
+    int found = 0;
+    for (size_t i = 0; i + size <= code.size(); i++)
+    {
+        if (std::equal(head.Words().begin(), head.Words().end(), code.begin() + static_cast<std::ptrdiff_t>(i)) &&
+            std::equal(tail.Words().begin(), tail.Words().end(),
+                       code.begin() + static_cast<std::ptrdiff_t>(i + skip + 2)))
+        {
+            found++;
+        }
+    }
+
+    return found == 1;
+}
+
+// Paper Mario (USA): Toad Town's tracks in their order, with their numbers, titles and mix calls. The five buildings
+// and the floor of Rowf's Badge Shop each have a track at the full level and one at the near level. Mixes 4 and 5 and
+// the unused mix 6 have one at the near level. Song 0x01 follows.
+void ToadTownTracks()
+{
+    constexpr uint32_t kNear = 0x80056044;
+    constexpr uint32_t kFull = 0x80056068;
+    struct Expected
+    {
+        uint32_t number;
+        const char* title;
+        uint32_t function; // 0 for a track without a mix.
+        uint32_t mix;
+    };
+    constexpr Expected kToadTown[] = {
+        {0x0, "Song 0x00: Toad Town", 0, 0},
+        {0x100, "Song 0x00: Toad Town, version 2", 0, 0},
+        {0x10000, "Song 0x00: Toad Town, Tayce T.'s House", kFull, 1},
+        {0x20000, "Song 0x00: Toad Town, Merlon's House", kFull, 2},
+        {0x30000, "Song 0x00: Toad Town, the Dojo", kFull, 3},
+        {0x40000, "Song 0x00: Toad Town, the pipe to the Tunnels", kNear, 4},
+        {0x50000, "Song 0x00: Toad Town, Minh T.'s Garden", kNear, 5},
+        {0x70000, "Song 0x00: Toad Town, Russ T.'s House", kFull, 7},
+        {0x80000, "Song 0x00: Toad Town, Rowf's Badge Shop", kFull, 8},
+        {0x90000, "Song 0x00: Toad Town, the Warehouse", kFull, 9},
+        {0x110000, "Song 0x00: Toad Town, outside Tayce T.'s House", kNear, 1},
+        {0x120000, "Song 0x00: Toad Town, outside Merlon's House", kNear, 2},
+        {0x130000, "Song 0x00: Toad Town, outside the Dojo", kNear, 3},
+        {0x170000, "Song 0x00: Toad Town, outside Russ T.'s House", kNear, 7},
+        {0x190000, "Song 0x00: Toad Town, outside the Warehouse", kNear, 9},
+        {0x180000, "Song 0x00: Toad Town, outside Rowf's Badge Shop", kNear, 8},
+        {0x60000, "Song 0x00: Toad Town, mix 6 (unused)", kNear, 6},
+        {0x1, "Song 0x01: Goomba Village", 0, 0},
+    };
+
+    const std::vector<const usf::rip::GameProfile*> found =
+        usf::rip::FindProfiles("3837f44cda784b466c9a2d99df70d77c322b97a0");
+    XSFLIB_REQUIRE(found.size() == 1 && found[0]->driver && found[0]->tracks.size() > std::size(kToadTown));
+    for (size_t i = 0; i < std::size(kToadTown); i++)
+    {
+        const Expected& expected = kToadTown[i];
+        const usf::rip::Track& track = found[0]->tracks[i];
+        XSFLIB_CHECK(track.number == expected.number && track.name == expected.title);
+        if (expected.function != 0)
+        {
+            XSFLIB_CHECK(CallsMix(found[0]->driver->code, expected.number, expected.function, expected.mix));
+        }
+    }
+
+    // Each track of the set has a number of its own.
+    std::set<uint32_t> numbers;
+    for (const usf::rip::Track& track : found[0]->tracks)
+    {
+        XSFLIB_CHECK(numbers.insert(track.number).second);
+    }
+}
+
 } // namespace
 
 int main()
@@ -676,5 +764,6 @@ int main()
                                         TrackPatches();
                                         RefusedPatches();
                                         ImageSets();
+                                        ToadTownTracks();
                                     });
 }
