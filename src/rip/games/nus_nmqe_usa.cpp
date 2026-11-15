@@ -19,6 +19,24 @@
 //   code at 0xB2C47C for Yoshi's Village. The code at 0x954004 swaps Dry Dry Desert's linked tracks at the oasis. Toad
 //   Town's triggers, at the addresses in kChanges, pick a mix by the player's position. Five of them have a building
 //   whose script sets the full level while the player is inside it.
+// - Outside such a building, the trigger of the building sets the near level of the same mix. The set therefore has a
+//   track for each of the five mixes at the near level and at the full level.
+// - Toad Town's song is the only one with mixes. Its tracks 8 to 11 are a layer that plays only in the loop. Every 96
+//   ticks, each of them branches to the section of the current mix in a table of ten. The sections of mix 0 are
+//   empty. A trigger calls 0x80056028 (far, level 0), 0x80056044 (near, level 0x57) or 0x80056068 (full, level 0x7F).
+//   Each of these calls the function at 0x800506C8. That function sets two flags on each track of the song: one when
+//   the mix changes and one when the level changes. At the track's next branch (0x800501A8), the first flag sets the
+//   track's level to 0 and resets its voices. The second starts a fade to the level of the mix over 144 ticks
+//   (0x80050888). Track 0 runs a command that sets the level of the base tracks, 1 to 5, at the start of the loop and
+//   every 192 ticks after it (0x800502F0). After a change of level, that command fades the base tracks over 72 ticks:
+//   to level 63 at the full level, and to level 127 otherwise. The intro has no branch. A mix set during the intro
+//   therefore comes in at the first branch of the loop. The driver calls 0x80056044 or 0x80056068 after it starts the
+//   song and before the song's first tick. Each mix of the set then plays the fades from the first branch of the loop.
+// - The script of Merlon's House requests the song, waits 20 frames and sets the full level. The script of the
+//   Warehouse waits 20 frames and sets a flag. The trigger then sets the full level. Those calls come during the intro
+//   too. No script sets the full level of mixes 4, 5 or 8, and none names mix 6. The trigger of mix 4 is by the pipe to
+//   the Tunnels (the map's entry at 0x826820). The trigger of mix 5 is by Minh T.'s Garden (Minh T.'s position at
+//   0x81E4B0), and the trigger of mix 8 by Rowf's Badge Shop (Rowf's position at 0x815444).
 // - The function at 0x8004EA34 runs the jumps of a song's list of phrases. A jump's count of 0 repeats for ever. The
 //   list holds the jump's label in t0. At 0x8004EAB8 the function makes a jump's first pass, with the count in a1. At
 //   0x8004EA68 it makes a later pass, with the count left in v0. A song without such a jump stops at the end of its
@@ -108,14 +126,20 @@ struct Change
 };
 
 constexpr Change kChanges[] = {
-    {0x00, 1, kToadTown, kSetMixFull, 1, true, "Tayce T.'s House"}, // Trigger at 0x8313E0.
-    {0x00, 2, kToadTown, kSetMixFull, 2, true, "Merlon's House"},   // Trigger at 0x8090E0.
-    {0x00, 3, kToadTown, kSetMixFull, 3, true, "the Dojo"},         // Trigger at 0x7F9118.
-    {0x00, 4, kToadTown, kSetMixNear, 4, true, "mix 4"},            // Trigger at 0x8313F8.
-    {0x00, 5, kToadTown, kSetMixNear, 5, true, "mix 5"},            // Trigger at 0x809110.
-    {0x00, 7, kToadTown, kSetMixFull, 7, true, "Russ T.'s House"},  // Trigger at 0x7F9100.
-    {0x00, 8, kToadTown, kSetMixNear, 8, true, "mix 8"},            // Trigger at 0x8090F8.
-    {0x00, 9, kToadTown, kSetMixFull, 9, true, "the Warehouse"},    // Trigger at 0x8520A0.
+    {0x00, 1, kToadTown, kSetMixFull, 1, true, "Tayce T.'s House"},        // Trigger at 0x8313E0.
+    {0x00, 2, kToadTown, kSetMixFull, 2, true, "Merlon's House"},          // Trigger at 0x8090E0.
+    {0x00, 3, kToadTown, kSetMixFull, 3, true, "the Dojo"},                // Trigger at 0x7F9118.
+    {0x00, 4, kToadTown, kSetMixNear, 4, true, "the pipe to the Tunnels"}, // Trigger at 0x8313F8.
+    {0x00, 5, kToadTown, kSetMixNear, 5, true, "Minh T.'s Garden"},        // Trigger at 0x809110.
+    {0x00, 7, kToadTown, kSetMixFull, 7, true, "Russ T.'s House"},         // Trigger at 0x7F9100.
+    {0x00, 8, kToadTown, kSetMixNear, 8, true, "Rowf's Badge Shop"},       // Trigger at 0x8090F8.
+    {0x00, 9, kToadTown, kSetMixFull, 9, true, "the Warehouse"},           // Trigger at 0x8520A0.
+    // The five buildings at the near level. The change is the mix plus 0x10.
+    {0x00, 0x11, kToadTown, kSetMixNear, 1, true, "outside Tayce T.'s House"},
+    {0x00, 0x12, kToadTown, kSetMixNear, 2, true, "outside Merlon's House"},
+    {0x00, 0x13, kToadTown, kSetMixNear, 3, true, "outside the Dojo"},
+    {0x00, 0x17, kToadTown, kSetMixNear, 7, true, "outside Russ T.'s House"},
+    {0x00, 0x19, kToadTown, kSetMixNear, 9, true, "outside the Warehouse"},
     {0x17, 1, kDryDryDesert, kSetLinkedMode, 1, false, "the Oasis"},
     {0x26, 1, kYoshisVillage, kSetTrackVolumes, 0, false, "full levels"},
     {0x4B, 1, kTunnels, kSetTrackVolumes, 2, false, "cold rooms"},
