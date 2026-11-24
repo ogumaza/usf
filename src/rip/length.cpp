@@ -2,7 +2,9 @@
 
 #include "rip/length.h"
 
+#include <cstddef>
 #include <map>
+#include <optional>
 #include <utility>
 
 namespace usf::rip
@@ -12,9 +14,10 @@ namespace
 
 constexpr uint64_t kMsPerSecond = 1000;
 
-// The adapter that MeasureLength plays (see xsflib/rip/length.h). It follows the output alone. It sees no voices and no
-// sequence player, so the sequence is always busy and never steady. It leaves out the tests from Ringing to
-// ActiveChannels. MeasureLength then takes the answers of a model that follows only its output.
+// The adapter that MeasureLength plays (see xsflib/rip/length.h). It follows the output alone. It reads no voices and
+// no sequence player. The sequence is therefore always busy and never steady. It leaves out the tests from Ringing to
+// ActiveChannels. MeasureLength then takes the answers of a model that follows only its output. The first sample that
+// isn't 0 comes from the samples that a player renders too.
 //
 // A sequence player may loop each of its tracks separately. libultra's compressed sequence player is one. Each track
 // that loops then jumps back once a pass. The jumps of one pass come one after another. MeasureLength would start its
@@ -66,6 +69,18 @@ public:
         return sounded_;
     }
 
+    // The milliseconds from the start of the frame just run to its first sample that isn't 0.
+    std::optional<double> FirstSampleMs() const
+    {
+        const std::optional<double> ms = renderer_.FirstSampleMs();
+        if (!ms)
+        {
+            return std::nullopt;
+        }
+
+        return *ms - static_cast<double>(renderer_.Ms() - 1);
+    }
+
     template <typename F>
     void OnLoop(F on_loop)
     {
@@ -108,8 +123,8 @@ private:
     bool sounded_ = false;
     bool heard_ = false; // Whether an earlier frame sounded.
 
-    // The track whose loops MeasureLength counts, once has_lead_ is set. A track register can hold any value, such as a
-    // channel's address in KSEG0. No track number can therefore mark a missing lead.
+    // The track whose loops MeasureLength counts, once has_lead_ is set. A track register can contain any value, such
+    // as a channel's address in KSEG0. No track number can therefore mark a missing lead.
     int lead_ = 0;
     bool has_lead_ = false;
 
@@ -118,17 +133,15 @@ private:
 
 } // namespace
 
-xsflib::rip::LengthRules GameLengthRules()
+xsflib::rip::LengthRules GameLengthRules(xsflib::rip::Limit limit)
 {
     xsflib::rip::LengthRules rules;
     rules.frame_ms = 1.0;
     rules.max_ms = kMaxTrackSeconds * static_cast<double>(kMsPerSecond);
     rules.max_frames = static_cast<uint64_t>(rules.max_ms / rules.frame_ms);
     rules.silent_frames = 180'000;
-    rules.fade_ms = 10'000.0;
-    rules.tail_ms = 500.0;
 
-    return rules;
+    return limit == xsflib::rip::Limit::kLong ? xsflib::rip::WithLongLimit(rules) : rules;
 }
 
 MsRenderer::MsRenderer(TrackPlayer& player) : player_(player)
@@ -137,12 +150,29 @@ MsRenderer::MsRenderer(TrackPlayer& player) : player_(player)
 
 std::span<const int16_t> MsRenderer::Next()
 {
-    remainder_ += player_.SampleRate();
+    start_frame_ = player_.Frames();
+    rate_ = player_.SampleRate();
+    remainder_ += rate_;
     const uint64_t frames = remainder_ / kMsPerSecond;
     remainder_ %= kMsPerSecond;
     samples_.resize(2 * frames);
     player_.Render(samples_);
     ms_++;
+
+    // A millisecond whose last frame plays at another rate starts a run at that rate. The frames before it played at
+    // the old rate.
+    const uint32_t rate = player_.SampleRate();
+    if (rate != run_rate_)
+    {
+        if (run_rate_ != 0)
+        {
+            run_start_ms_ += static_cast<double>(start_frame_ - run_start_frame_) * static_cast<double>(kMsPerSecond) /
+                             static_cast<double>(run_rate_);
+        }
+
+        run_start_frame_ = start_frame_;
+        run_rate_ = rate;
+    }
 
     return samples_;
 }
@@ -152,17 +182,33 @@ uint64_t MsRenderer::Ms() const
     return ms_;
 }
 
+std::optional<double> MsRenderer::FirstSampleMs() const
+{
+    for (size_t i = 0; i < samples_.size(); i++)
+    {
+        if (samples_[i] != 0)
+        {
+            const uint64_t frame = start_frame_ - run_start_frame_ + i / 2;
+            return run_start_ms_ +
+                   static_cast<double>(frame) * static_cast<double>(kMsPerSecond) / static_cast<double>(run_rate_);
+        }
+    }
+
+    return std::nullopt;
+}
+
 TrackPlayer& MsRenderer::Player()
 {
     return player_;
 }
 
 std::optional<xsflib::rip::Timing> MeasureTrack(MsRenderer& renderer,
-                                                const std::function<void(std::span<const int16_t>)>& on_samples)
+                                                const std::function<void(std::span<const int16_t>)>& on_samples,
+                                                xsflib::rip::Limit limit)
 {
     OutputModel model(renderer, on_samples);
 
-    return xsflib::rip::MeasureLength(model, GameLengthRules());
+    return xsflib::rip::MeasureLength(model, GameLengthRules(limit));
 }
 
 } // namespace usf::rip

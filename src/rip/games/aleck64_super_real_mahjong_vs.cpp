@@ -6,19 +6,20 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The sequence file at cartridge offset 0x268770 holds 40 sequences. The first 20 play in stereo, and the next 20
-//   hold the same songs for mono. Sequences 13 to 19 are empty, and so are 33 to 39.
-// - The function at 0x80030158 takes a song's number in a0. It asks for the song only while the flag at 0x800E3F0D is
-//   set. It calls the function at 0x80001E38, which stops the song that plays, reads the song's sequence from the
-//   cartridge and starts it. In mono, the word at 0x80085860 holds 1, and that function adds 20 to the song's number.
-// - A setting of the service menu picks the mode: bit 0 of the byte at 0x800DE6C8, among the game's saved settings,
-//   which the function at 0x80005058 returns. At boot, the code at 0x800337A8 plays stereo when the bit is set. The
-//   function at 0x80005388 clears the settings when their checksum fails, which leaves the game in mono. The menu's
-//   code at 0x80033B0C reads the setting, and its change calls the function at 0x80001CE0 with the new mode: 0 for
-//   stereo. That function sets the word at 0x80085860 and gives the player the mode's bank file: the one at cartridge
-//   offset 0x81F90 for mono, or the one at 0x8E040 for stereo. The stereo set's driver makes the same call before it
-//   asks for the song.
-// - The function at 0x80035DB4 unpacks run-length data. The attract mode asks for song 12 at 4.21 s and then unpacks
+// - The sequence file at cartridge offset 0x268770 contains 40 sequences. The first 20 play in stereo, and the next 20
+//   contain the same songs for mono. Sequences 13 to 19 are empty, and so are 33 to 39.
+// - The function at 0x80030158 takes a song's number in a0. It requests the song only while the flag at 0x800E3F0D is
+//   set. It calls the function at 0x80001E38. That function stops the song that plays, reads the song's sequence from
+//   the cartridge and starts it. In mono, the word at 0x80085860 contains 1, and that function adds 20 to the song's
+//   number.
+// - A setting of the service menu picks the mode: bit 0 of the byte at 0x800DE6C8, among the game's saved settings. The
+//   function at 0x80005058 returns it. At boot, the code at 0x800337A8 plays stereo when the bit is set. The function
+//   at 0x80005388 clears the settings when their checksum fails. That leaves the game in mono. The menu's code at
+//   0x80033B0C reads the setting, and its change calls the function at 0x80001CE0 with the new mode: 0 for stereo. That
+//   function sets the word at 0x80085860 and gives the player the mode's bank file: the one at cartridge offset 0x81F90
+//   for mono, or the one at 0x8E040 for stereo. The stereo set's driver makes the same call before it requests the
+//   song.
+// - The function at 0x80035DB4 unpacks run-length data. The attract mode requests song 12 at 4.21 s and then unpacks
 //   the data of its next screen. The snapshot takes over the game's thread in the unpacking, at its first quiet arrival
 //   at 0x80035DEC from 4.21 s on: 4.30 s after boot.
 // - The thread of the game's main loop (0x8008A9E0) calls the function at 0x8002EDD8 once a frame. That function reads
@@ -55,7 +56,6 @@ GameProfile Aleck64SuperRealMahjongVsSet(bool stereo)
         Aleck64Profile(ultralib::machine::Board::kAleck64, "a590216a171a61517cd07ff629d8215631c8be87");
     profile.serial = "Aleck64 Super Real Mahjong VS";
     profile.set = stereo ? "stereo" : "mono";
-    profile.year = "1999";
     profile.sound_driver = kCompressedSequencePlayer;
     profile.board_inputs.switches = kFactorySwitches;
 

@@ -11,11 +11,11 @@
 #include <string>
 #include <vector>
 
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "xsflib/testing/check.h"
 
 #include "rip/driver.h"
-#include "ultralib/machine/system.h"
-#include "ultralib/testing/test_programs.h"
 
 namespace
 {
@@ -167,7 +167,7 @@ void DriverRun()
     XSFLIB_CHECK(low_track.ReadPhysical32(kResults + 12) == 0xFFFFFFFF);
     XSFLIB_CHECK(high_track.ReadPhysical32(kResults + 8) == 0x80000080);
 
-    // Half a second holds 30 fields of NTSC video, give or take one at each end.
+    // Half a second has 30 fields of NTSC video, give or take one at each end.
     const uint32_t frames = CounterValue(low_track, 0);
     XSFLIB_CHECK(frames >= 29 && frames <= 31);
     XSFLIB_CHECK(CounterValue(low_track, 1) == 5 && CounterValue(high_track, 1) == 5);
@@ -215,7 +215,7 @@ void DriverWaitCall()
     const auto owner = RunDriver(usf::rip::BuildCallDriver(options), 0);
     ultralib::machine::System& system = *owner;
 
-    // The counters return at once, so the run stops anywhere in a frame.
+    // The counters return at once. The run therefore stops anywhere in a frame.
     const uint32_t frames = CounterValue(system, 0);
     const uint32_t waits = CounterValue(system, 1);
     XSFLIB_CHECK(frames > 100);
@@ -236,8 +236,8 @@ void MessageCalls()
     XSFLIB_CHECK(wait.arguments[2].value == 1 && drop.arguments[2].value == 0);
 }
 
-// A retrace client's queue holds one message. Its buffer follows the queue's 24 bytes, and the client's record follows
-// the buffer.
+// A retrace client's queue has room for one message. Its buffer follows the queue's 24 bytes, and the client's record
+// follows the buffer.
 void RetraceClientCalls()
 {
     const usf::rip::RetraceClient client = {

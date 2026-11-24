@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 
-// Mario Tennis (USA): the game's music, through Software Creations' music library. The game has no sound test. Each
-// title is the name of the song in the game's song table.
+// Mario Tennis (USA): the game's music, through Software Creations' music library. The game has no sound test. The
+// tracks go by the songs' places in the game's song table.
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The game's code at 0x802EC000 is an overlay that it unpacks at boot. The table at 0x802F4ABC holds 66 songs: the
+// - The game's code at 0x802EC000 is an overlay that it unpacks at boot. The table at 0x802F4ABC contains 66 songs: the
 //   file number of each one in the game's file system and its name.
-// - The function at 0x802ECD54 takes a song's place in that table and asks for the song. The game thread calls the
+// - The function at 0x802ECD54 takes a song's place in that table and requests the song. The game thread calls the
 //   function at 0x802ECC60 once a frame. That function then loads the file, starts the song and gives its handle the
 //   game's level.
 // - The snapshot takes over the game thread at the first call of the function at 0x802ECD54.
@@ -18,7 +18,7 @@
 //   v1, the channel in a0 and the loop's depth in a2. A count of 0xFF repeats for ever.
 // - At each retrace the scheduler sends a message to its clients, at 0x80032574, whether the game draws or not. The
 //   game thread (0x80061D98, priority 50) waits for them on the queue at 0x80061F50, at 0x80032018, through osRecvMesg
-//   at 0x80032DE0. The queue is full at the snapshot: it holds eight messages.
+//   at 0x80032DE0. The queue is full at the snapshot: it contains eight messages.
 // - Only the idle thread (0x8005BE30, priority 0) has a lower priority. The idle loop at 0x80031D90 loads the word at
 //   0x80061F6C until it isn't zero, and then calls the function that the word points to. Only the boot code stores to
 //   that word, zero each time: at 0x8003118C, and through 0x80031DC4 at 0x80031E78. The legacy players skip only a loop
@@ -46,7 +46,7 @@ constexpr uint32_t kRetraceQueue = 0x80061F50;
 constexpr int kQueuedMessages = 8;
 constexpr uint32_t kIdleBranch = 0x80031D98;
 
-// A track's number holds the song's place in the table, and a second version above it.
+// A track's number contains the song's place in the table, and a second version above it.
 constexpr uint16_t kPlaceMask = 0xFF;
 constexpr int kVersionShift = 8;
 constexpr uint32_t kAllMask = 0xFFFFFFFF;
@@ -67,20 +67,10 @@ constexpr Tempo kTempos[] = {{kFasterTroBabyM, 0x8E}, {kTroMario, 0x7C}, {kTroWa
 // call in each of the first frames. A call before the song starts reaches no channel.
 constexpr uint32_t kTempoFrames = 6;
 
-// The end of RDRAM. A run of the game holds zeros there.
+// The end of RDRAM. A run of the game leaves zeros there.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
-constexpr const char* kSongs[] = {
-    "BG01",      "BG02",       "BG03",      "BG04",      "BG05",      "BG08",        "BG09",      "BG10",
-    "BG11",      "VS",         "BGM",       "BGM2",      "MAKE",      "FINAL",       "KACHI",     "MENU",
-    "RESULT",    "GAMEPT",     "KACHI2",    "MAKE2",     "MAKE3",     "MARIO",       "MARIO2",    "MARIO4",
-    "PEACH",     "PEACH2",     "PEACH3",    "SETPOINT",  "VS2",       "TAIBREAK",    "END1",      "END2",
-    "COMIKAL",   "E_JINGLE",   "KUPPA",     "TITLE",     "DONKY",     "WARIO",       "YOSSI",     "DOUBLES",
-    "MUTEKI",    "SINGLE",     "TRO-BABYM", "TRO-DKJR",  "TRO-DONKY", "TRO-KINOPIO", "TRO-KUPPA", "TRO-MARIO",
-    "TRO-PEACH", "TRO-WARIO",  "TRO-YOSSI", "TRO-CASAR", "TRO-DAISY", "TRO-GB",      "TRO-HEIHO", "TRO-LUISI",
-    "TRO-PATA",  "TRO-TERESA", "TRO-WALUI", "TRO-BOY",   "TRO-GIRL",  "TRO-MASSOU",  "OP1",       "OP2",
-    "OP3",       "OP4",
-};
+constexpr uint32_t kSongs = 66;
 
 // The channels of a song loop separately, and the rip's length model doesn't settle on one length. Each entry is the
 // time that the slowest channel takes to reach its loop's second pass, measured in usf's core. A song that ends by
@@ -93,7 +83,7 @@ constexpr double kSongSeconds[] = {
     0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
 };
 
-static_assert(std::size(kSongSeconds) == std::size(kSongs));
+static_assert(std::size(kSongSeconds) == kSongs);
 
 } // namespace
 
@@ -103,7 +93,6 @@ GameProfile NusNm8eUsa()
     profile.game = "Mario Tennis";
     profile.serial = "NUS-NM8E-USA";
     profile.sha1 = "999047f07cec931ffbdcc7b33b8502ef602807ee";
-    profile.year = "2000";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;
 
@@ -146,12 +135,9 @@ GameProfile NusNm8eUsa()
     profile.loop_watches.push_back(
         {.address = kLoopEnd, .target_register = mips::kA2, .track_register = mips::kA0, .count_register = mips::kV1});
 
-    uint32_t number = 0;
-    for (const char* name : kSongs)
+    for (uint32_t number = 0; number < kSongs; number++)
     {
-        Track track;
-        track.number = number++;
-        track.name = name;
+        Track track = NumberedTrack(number, NumberTitle("Song", number, TitleBase::kHex));
         if (kSongSeconds[track.number] > 0.0)
         {
             track.length_seconds = kSongSeconds[track.number];
@@ -162,7 +148,6 @@ GameProfile NusNm8eUsa()
         if (track.number == kTroBabyM)
         {
             track.number = kFasterTroBabyM;
-            track.name = "TRO-BABYM, faster";
             profile.tracks.push_back(track);
         }
     }

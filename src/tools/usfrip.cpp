@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 // usfrip: rips a Nintendo 64 game's music into a USF set: one .usflib and one .miniusf for each track. It runs the
-// game's code on the emulator core, with the game's profile (src/rip/profile.h) saying where to stop and how each track
+// game's code on the emulator core. The game's profile (src/rip/profile.h) sets where the run stops and how each track
 // is chosen.
 //
 // usage: usfrip [options] <image> [<image> ...]
@@ -16,15 +16,18 @@
 #include <optional>
 #include <regex>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/rom_set.h"
+#include "ultralib/machine/system.h"
 #include "xsflib/cli/parallel.h"
 #include "xsflib/cli/rip.h"
 #include "xsflib/files.h"
 #include "xsflib/rip/file_names.h"
+#include "xsflib/rip/length_tags.h"
 #include "xsflib/rip/rom_set.h"
 #include "xsflib/rip/tool.h"
 #include "xsflib/sha1.h"
@@ -33,9 +36,6 @@
 #include "rip/rip.h"
 #include "rip/snapshot.h"
 #include "rip/trim.h"
-#include "ultralib/machine/constants.h"
-#include "ultralib/machine/rom_set.h"
-#include "ultralib/machine/system.h"
 
 namespace
 {
@@ -74,7 +74,7 @@ constexpr char kUsage[] =
     "  --jobs N             the number of tracks that run at once (default: the number of CPU\n"
     "                       threads)\n"
     "  --game NAME, --artist NAME, --year YEAR, --copyright TEXT, --by NAME\n"
-    "                       tags (--by defaults to usfrip, the others to the profile's)\n"
+    "                       tags (--game defaults to the image's name, --by to usfrip)\n"
     "  --version            show the version\n"
     "  -h, --help           show this help\n";
 
@@ -133,7 +133,7 @@ int BeforeInputs(std::vector<std::string>&, Options& o)
     return 0;
 }
 
-// The image's SHA-1 in big-endian byte order, which the profiles name.
+// The image's SHA-1 in big-endian byte order. The profiles name images by it.
 std::string ImageSha1(std::vector<uint8_t> rom)
 {
     ultralib::machine::ToConsoleOrder(rom);
@@ -178,7 +178,7 @@ void WarnAboutRuns(const std::vector<Job>& jobs, const Options& o)
     {
         if (job.timing && job.timing->silent)
         {
-            std::fprintf(stderr, "warning: %s makes no sound\n", job.label.c_str());
+            std::fprintf(stderr, "warning: %s makes no sound and gets no mini\n", job.label.c_str());
         }
 
         // libultra keeps osTvType at 0x300. One legacy player writes 0 there at the start of a track. libultra reads 0
@@ -189,7 +189,7 @@ void WarnAboutRuns(const std::vector<Job>& jobs, const Options& o)
                          job.label.c_str(), ultralib::machine::kOsTvTypeAddress);
         }
 
-        // A board's game may still use the board after the snapshot. The players have nothing there, so the track can
+        // A board's game may still use the board after the snapshot. The players have nothing there. The track can then
         // sound different from the game.
         if (job.run.board_accesses > 0)
         {
@@ -201,21 +201,16 @@ void WarnAboutRuns(const std::vector<Job>& jobs, const Options& o)
     }
 }
 
-// Writes the library and the minis of `set` into `out_dir`, and adds the path of each mini to `mini_paths`. Returns 1
-// if a file can't be written, or 0.
+// Writes the library and the minis of `set` into `out_dir`, and adds the path of each mini to `mini_paths`. The game
+// tag is `game`. It also names the library. Returns 1 if a file can't be written, or 0.
 int WriteSet(const GameProfile& profile, const usf::rip::SetSections& set, const std::vector<Job>& jobs,
-             const fs::path& out_dir, const Options& o, xsflib::cli::FileNameRegistries& names,
+             const std::string& game, const fs::path& out_dir, const Options& o, xsflib::cli::FileNameRegistries& names,
              std::vector<fs::path>& mini_paths)
 {
     xsflib::rip::FileNames& out_names = xsflib::cli::NamesIn(names, out_dir, ".usflib", ".miniusf");
 
-    xsflib::cli::RipOptions tag_options = o;
-    tag_options.artist = o.artist.empty() ? profile.artist : o.artist;
-    tag_options.year = o.year.empty() ? profile.year : o.year;
-    tag_options.copyright = o.copyright.empty() ? profile.copyright : o.copyright;
-    const std::string game = o.game_name.empty() ? profile.game : o.game_name;
     usf::rip::SetTags tags;
-    tags.common = xsflib::cli::RipTags(tag_options, game, "usf", nullptr);
+    tags.common = xsflib::cli::RipTags(o, game, "usf", nullptr);
     tags.ripper = std::string("usfrip ") + USF_VERSION;
 
     const std::vector<uint8_t> library = usf::rip::LibraryFile(profile, set.library, tags);
@@ -238,7 +233,9 @@ int WriteSet(const GameProfile& profile, const usf::rip::SetSections& set, const
     settings.sizes = true;
     settings.paths = &mini_paths;
 
-    return xsflib::cli::WriteMinis(out_dir, out_names, jobs, tags.common, settings, build) < 0 ? 1 : 0;
+    return xsflib::cli::WriteMinis(out_dir, out_names, jobs, tags.common, usf::rip::kLengthFrom, settings, build) < 0
+               ? 1
+               : 0;
 }
 
 // Each mini, played back with the library, must give what its untrimmed state gave. Returns 1 if a mini differs, or 0.
@@ -279,9 +276,9 @@ int CheckMinis(const std::vector<Job>& jobs, const std::vector<fs::path>& mini_p
     return result;
 }
 
-// Rips one set of the image into `out_dir`.
-int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job> jobs, const fs::path& out_dir,
-           const Options& o, xsflib::cli::FileNameRegistries& names)
+// Rips one set of the image into `out_dir`, with the game tag `game`.
+int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job> jobs, const std::string& game,
+           const fs::path& out_dir, const Options& o, xsflib::cli::FileNameRegistries& names)
 {
     const usf::rip::Snapshot snapshot = usf::rip::TakeSnapshot(profile, std::move(rom), o.pif_rom);
     std::fprintf(stderr, "snapshot at %.3f s, arrival %d\n", snapshot.seconds, snapshot.arrival);
@@ -292,6 +289,7 @@ int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job
     settings.coverage = o.trim;
     settings.reference = o.check;
     settings.margin_seconds = o.margin;
+    settings.limit = profile.sound_effects ? xsflib::rip::Limit::kDefault : xsflib::rip::Limit::kLong;
     const auto analyze = [&](Job& job)
     {
         job.run = usf::rip::RunTrack(profile, snapshot, profile.tracks[job.track], settings);
@@ -303,6 +301,12 @@ int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job
     analysis.progress = "ran";
     xsflib::cli::AnalyzeLengths(jobs, o.jobs, analyze, analysis);
     WarnAboutRuns(jobs, o);
+    jobs = usf::rip::SoundingJobs(std::move(jobs));
+    if (jobs.empty())
+    {
+        std::fprintf(stderr, "error: no track of the set makes a sound\n");
+        return 1;
+    }
 
     // The set.
     std::vector<usf::rip::Track> tracks;
@@ -323,7 +327,7 @@ int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job
     }
 
     std::vector<fs::path> mini_paths;
-    if (WriteSet(profile, set, jobs, out_dir, o, names, mini_paths) != 0)
+    if (WriteSet(profile, set, jobs, game, out_dir, o, names, mini_paths) != 0)
     {
         return 1;
     }
@@ -335,7 +339,7 @@ int RipSet(std::vector<uint8_t> rom, const GameProfile& profile, std::vector<Job
 }
 
 // The Aleck64 sets of the profiles, in the order of Profiles(). The first game whose chips are all in a set wins. The
-// sets point into the profiles, which last as long as the program.
+// sets point into the profiles. The profiles last as long as the program.
 std::vector<ultralib::machine::Aleck64Set> ProfileSets()
 {
     std::vector<ultralib::machine::Aleck64Set> sets;
@@ -369,16 +373,11 @@ bool ReadSetImage(const std::string& input, const fs::path& path, std::vector<ui
 
     if (image.game && !image.others.empty())
     {
-        std::string other_games;
-        for (const size_t other : image.others)
-        {
-            other_games += (other_games.empty() ? "" : ", ") + std::string(kSets[other].name);
-        }
-
         std::fprintf(stderr,
                      "warning: %s contains the chips of more than one game. Only %s is ripped. Not ripped: %s. "
                      "Put each game in a folder or an archive of its own.\n",
-                     input.c_str(), std::string(kSets[*image.game].name).c_str(), other_games.c_str());
+                     input.c_str(), std::string(kSets[*image.game].name).c_str(),
+                     ultralib::machine::OtherGameNames(image, kSets).c_str());
     }
 
     rom = std::move(image.image);
@@ -433,6 +432,7 @@ int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRe
 
     // An image with more than one set puts each set in a folder named after the set.
     const bool several = profiles.size() > 1;
+    const std::string game = o.game_name.empty() ? xsflib::rip::NameOfInput(input) : o.game_name;
     const fs::path base_dir = o.out_dir.empty() ? xsflib::rip::DefaultOutputDir(input, "_usf") : fs::path(o.out_dir);
     int result = 0;
     bool any_track = false;
@@ -469,7 +469,7 @@ int RipInput(const std::string& input, const Options& o, xsflib::cli::FileNameRe
 
         any_track = true;
         const fs::path out_dir = several ? base_dir / xsflib::PathFromUtf8(profile->set) : base_dir;
-        result = std::max(result, RipSet(rom, *profile, std::move(jobs), out_dir, o, names));
+        result = std::max(result, RipSet(rom, *profile, std::move(jobs), game, out_dir, o, names));
     }
 
     if (!any_set)

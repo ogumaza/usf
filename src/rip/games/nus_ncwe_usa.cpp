@@ -5,8 +5,8 @@
 // Addresses come from the game's code in the image and from runs in usf's core. The main segment is copied from
 // cartridge offset 0x1000 to 0x802AD400.
 //
-// - The sequence file at cartridge offset 0x82CF10 holds 14 sequences. Its pointer is kept at 0x80395690. Songs 0 to 3
-//   are short sequences of 116 to 151 bytes. Each plays long samples of the music bank.
+// - The sequence file at cartridge offset 0x82CF10 contains 14 sequences. Its pointer is kept at 0x80395690. Songs 0 to
+//   3 are short sequences of 116 to 151 bytes. Each plays long samples of the music bank.
 // - The song-select function at 0x80300374 takes the song's number in a0. It posts command 8 to the sound command queue
 //   at 0x803D1650. The audio thread runs the queue in each audio frame through 0x80300DB4. Command 8 stops the player
 //   and leaves the number in the request word at 0x803956D4. After a delay of 30 audio frames, 0x802AF2D8 loads the
@@ -20,9 +20,9 @@
 //   Australia, Hawaii, Mexico, Florida and Moon. The menu's order table at 0x80344900 gives the number of the course
 //   chosen, kept at 0x803BF2EF. The championship reads the entry of the table of courses from the halfwords at
 //   0x8033B67C and adds 15 to the cruise's entry for the same course (0x8033B69C, numbered from 1). Runs of the
-//   championship with each number asked for each song: one with the controller alone showed GERMANY, reached entry 15
-//   and asked for song 0x0B. Entries n and n + 15 hold the same course's data. The only song that differs between them
-//   is the Moon's: song 9 in a cruise and song 8 in a championship.
+//   championship with each number requested for each song: one with the controller alone showed GERMANY, reached entry
+//   15 and requested song 0x0B. Entries n and n + 15 contain the same course's data. The only song that differs between
+//   them is the Moon's: song 9 in a cruise and song 8 in a championship.
 // - The threads: 0x8035B130 is the game thread (priority 10), 0x80393178 the audio thread (priority 30) and 0x8035E540
 //   the scheduler (priority 40). osCreateThread is at 0x80319890.
 // - The sequence player's event reader at 0x8031CDB4 stores the jump back to a loop in the track's read pointer at
@@ -36,9 +36,9 @@
 //   the finish's sounds: effect 5 in first place, effect 6 in second or third, and effect 7 in fourth or lower. The
 //   first three places also play effect 0x29, a looped sound, and first place plays effect 0x28 too. Runs of a race in
 //   which a patch made the car finish in each place played these effects. The code at 0x802AEEF8 stops every other
-//   effect while these play. They're samples of the sound-effect bank (cartridge offset 0x5C4C60), so no song can play
-//   them. Each one's track writes the sound state and the queue's first command. The songs play here without the race's
-//   other sounds, and the fanfares play without effects 0x28 and 0x29 in the same way.
+//   effect while these play. They're samples of the sound-effect bank (cartridge offset 0x5C4C60), and no song can
+//   play them. Each one's track writes the sound state and the queue's first command. The songs play here
+//   without the race's other sounds, and the fanfares play without effects 0x28 and 0x29 in the same way.
 
 #include "rip/games/games.h"
 #include "rip/games/tracks.h"
@@ -49,8 +49,8 @@ namespace usf::rip::games
 namespace
 {
 
-// The audio frame at 0x802AE150 runs in the audio thread. At 0x802AE184 it calls 0x802AF7F4, which runs the sound
-// commands. The frame then hands the AI its next buffer at 0x802AE1B8 and, at its end, updates the music through
+// The audio frame at 0x802AE150 runs in the audio thread. At 0x802AE184 it calls 0x802AF7F4. That function runs the
+// sound commands. The frame then hands the AI its next buffer at 0x802AE1B8 and, at its end, updates the music through
 // 0x802AF2D8.
 constexpr uint32_t kAudioFrameCommands = 0x802AE184;
 
@@ -96,24 +96,12 @@ struct Fanfare
     uint32_t sound;  // The ALSound in the list at 0x803956E0.
     uint32_t volume; // The effect's third byte in the race's table.
     double seconds;
-    const char* name;
 };
 
 constexpr Fanfare kFanfares[] = {
-    {.effect = 5, .sound = 0x8037AB88, .volume = 0xC8, .seconds = 8.2, .name = "Effect 0x05: first place fanfare"},
-    {.effect = 6,
-     .sound = 0x8037AC50,
-     .volume = 0xAA,
-     .seconds = 4.4,
-     .name = "Effect 0x06: second or third place fanfare"},
-    {.effect = 7, .sound = 0x8037AD18, .volume = 0xAF, .seconds = 2.7, .name = "Effect 0x07: fourth place or lower"},
-};
-
-// The set words two song names as earlier rips did. ultralib's table says "Moon in a championship" and "Moon in a
-// cruise".
-constexpr SongName kSetSongNames[] = {
-    {0x08, "New York, Russia, Australia, Moon (Championship)"},
-    {0x09, "France, Moon (Cruise)"},
+    {.effect = 5, .sound = 0x8037AB88, .volume = 0xC8, .seconds = 8.2}, // First place.
+    {.effect = 6, .sound = 0x8037AC50, .volume = 0xAA, .seconds = 4.4}, // Second or third place.
+    {.effect = 7, .sound = 0x8037AD18, .volume = 0xAF, .seconds = 2.7}, // Fourth place or lower.
 };
 
 } // namespace
@@ -124,16 +112,15 @@ GameProfile NusNcweUsa()
     profile.game = "Cruis'n World";
     profile.serial = "NUS-NCWE-USA";
     profile.sha1 = "6da1a6a2bda687d50e798d80c342948ad1738202";
-    profile.year = "1998";
     profile.cic = ultralib::machine::Cic::k6106;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
     profile.eeprom = ultralib::machine::EepromType::k4Kbit;
 
-    // The audio thread keeps a second buffer waiting in the AI whenever the game thread runs, so no point in the game
-    // thread is quiet. The snapshot comes in the audio frame instead, during the screens before the title, when no song
-    // plays. The patches make the music update load the requested song at the end of that frame. The selector sets the
-    // request. The game thread stops, so that the game requests no other song.
+    // The audio thread keeps a second buffer waiting in the AI whenever the game thread runs. No point in the game
+    // thread is therefore quiet. The snapshot comes in the audio frame instead, during the screens before the title,
+    // when no song plays. The patches make the music update load the requested song at the end of that frame. The
+    // selector sets the request. The profile stops the game thread. The game then can't request another song.
     profile.snapshot_address = kAudioFrameCommands;
     profile.snapshot_hit = 300;
     profile.quiet_tries = 120;
@@ -148,15 +135,14 @@ GameProfile NusNcweUsa()
 
     for (uint32_t index = 0; index < kSongs; index++)
     {
-        const char* name = FindSongName(kSetSongNames, ultralib::n64::kCruisnWorldSongNames, index);
-        profile.tracks.push_back(NumberedTrack(index, SongTitle("Song", index, TitleBase::kHex, name)));
+        profile.tracks.push_back(NumberedTrack(index, NumberTitle("Song", index, TitleBase::kHex)));
     }
 
     for (const Fanfare& fanfare : kFanfares)
     {
         Track track;
         track.number = kFanfareNumberBase + fanfare.effect;
-        track.name = fanfare.name;
+        track.name = NumberTitle("Effect", fanfare.effect, TitleBase::kHex);
         track.length_seconds = fanfare.seconds;
         track.rdram_patches = {
             {.address = kSongPending, .words = {0}},

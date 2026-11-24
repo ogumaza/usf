@@ -9,11 +9,16 @@ requires XMPlay 3.8.2 or later. Put it in XMPlay's folder, or in a folder inside
 ## Features
 
 - Tags become XMPlay's tags: `game` as album and `year` as date. The Message info window lists every tag except `_lib`,
-  the flags, `length`, `fade`, `volume` and `utf8`.
+  the flags, `length`, `fade`, `loop_start`, `loop_length`, `volume` and `utf8`.
 - Length and fade come from the `length` and `fade` tags. Files without a length tag play for the default length and
   fade.
-- The plugin's options page, among the decoders in XMPlay's options: default length and fade, endless playback, and
-  rendering ahead. XMPlay stores the settings.
+- Each track plays as a soundtrack album plays it: from the first sound, after 0.5 s of silence, with 1 s of silence
+  after it. A loop plays the passes in its tags, or another number of passes with its `loop_start` and `loop_length`
+  tags.
+- The plugin's options page, among the decoders in XMPlay's options: default length and fade, the fade's curve,
+  endless playback, rendering ahead, and the settings of an album's track: skip silence at the start, the silences
+  before and after a track, the loops, one pass for long loops, the fade length for loops, ignore length and fade
+  tags, and skip silence at the end. XMPlay stores the settings.
 - During playback, the plugin renders ahead on a separate thread as fast as the CPU allows. It buffers up to 10 minutes
   and 10 seconds of audio. Seeking within the buffer is instant. Seeking further ahead waits for rendering to reach the
   requested position. Seeking back before the buffered audio renders again from the start of the track.
@@ -45,6 +50,7 @@ rips.
 
 ## Licence
 
-Like the rest of usf, the plugin is MIT-licensed. It contains xsflib (MIT) and code adapted from Iconoclast's RSP (CC0
-1.0), and uses zlib. Ship `LICENSE` and `THIRD-PARTY-NOTICES.md` (or their text) with a build. The XMPlay plugin SDK
-states no licence. The plugin uses only the SDK's declarations of XMPlay's interface. No code from the SDK goes into it.
+Like the rest of usf, the plugin is MIT-licensed. It contains xsflib and ultralib (both MIT) and uses zlib. ultralib
+includes code adapted from Iconoclast's RSP (CC0 1.0). Ship `LICENSE` and `THIRD-PARTY-NOTICES.md` (or their text) with
+a build. The XMPlay plugin SDK states no licence. The plugin uses only the SDK's declarations of XMPlay's interface. No
+code from the SDK goes into it.

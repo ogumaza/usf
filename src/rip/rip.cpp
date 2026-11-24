@@ -2,16 +2,20 @@
 
 #include "rip/rip.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <optional>
+#include <span>
 
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
 #include "xsflib/bytes.h"
+#include "xsflib/rip/length_tags.h"
 
 #include "rip/length.h"
 #include "rip/player.h"
-#include "ultralib/machine/save_state.h"
-#include "ultralib/machine/system.h"
 #include "usf/usf_file.h"
 
 namespace usf::rip
@@ -52,6 +56,19 @@ struct RunSpan
     uint64_t end_ms = 0;  // Where the run stops.
 };
 
+// The time from the start of a track to the end of its fade, as a player runs it: the end of its length tags
+// (xsflib::rip::LengthTags::end_ms). A timing that the profile sets has no first sample before its run. It plays its
+// length, then its fade, or the fade of a track that ends.
+uint64_t PlayMs(const xsflib::rip::Timing& timing)
+{
+    if (const std::optional<xsflib::rip::LengthTags> tags = xsflib::rip::TagsOfTiming(timing, kLengthFrom, 0.0))
+    {
+        return static_cast<uint64_t>(tags->end_ms);
+    }
+
+    return static_cast<uint64_t>(timing.length_ms + (timing.fade_ms > 0 ? timing.fade_ms : xsflib::rip::kEndFadeMs));
+}
+
 // The coverage runs on past the end of the fade: for a looping track, half its length more, at least one pass of its
 // loop; and the margin for every track. The reference ends with the fade.
 RunSpan SpanOf(const std::optional<xsflib::rip::Timing>& timing, const RunSettings& settings)
@@ -60,7 +77,7 @@ RunSpan SpanOf(const std::optional<xsflib::rip::Timing>& timing, const RunSettin
     uint64_t run_ms = play_ms;
     if (timing)
     {
-        play_ms = static_cast<uint64_t>(timing->length_ms + timing->fade_ms);
+        play_ms = PlayMs(*timing);
         run_ms = play_ms + (timing->fade_ms > 0 ? static_cast<uint64_t>(timing->length_ms) / 2 : 0);
     }
 
@@ -86,6 +103,61 @@ void FinishReference(MsRenderer& renderer, const OnSamples& on_samples, const Sa
     run.reference.assign(hashes.Blocks().begin(), hashes.Blocks().begin() + static_cast<std::ptrdiff_t>(blocks));
 }
 
+// The sounds of a run that complete a timing that the profile sets, as the length analysis finds them in the timings
+// that it measures: the first sample that isn't 0, the first millisecond with a sample over -72 dB, and the end of the
+// last such millisecond up to the profile's length.
+class RunSounds
+{
+public:
+    explicit RunSounds(long long length_ms) : length_ms_(length_ms)
+    {
+    }
+
+    void Add(const MsRenderer& renderer, std::span<const int16_t> samples)
+    {
+        if (!sample_ms_)
+        {
+            sample_ms_ = renderer.FirstSampleMs();
+        }
+
+        const auto ms = static_cast<long long>(renderer.Ms() - 1);
+        if (ms < length_ms_ && xsflib::rip::Audible(samples))
+        {
+            first_sound_ms_ = first_sound_ms_.value_or(ms);
+            end_ms_ = ms + 1;
+        }
+    }
+
+    bool Found() const
+    {
+        return sample_ms_.has_value();
+    }
+
+    // Sets the first sounds of `timing`. A track that ends ends at its last sound. A track that made no sound is
+    // silent.
+    void SetIn(xsflib::rip::Timing& timing) const
+    {
+        if (!sample_ms_)
+        {
+            timing.silent = true;
+            return;
+        }
+
+        timing.first_sample_ms = static_cast<long long>(*sample_ms_ + 0.5);
+        timing.first_sound_ms = first_sound_ms_;
+        if (timing.fade_ms == 0 && end_ms_ > 0)
+        {
+            timing.length_ms = std::min(timing.length_ms, end_ms_);
+        }
+    }
+
+private:
+    long long length_ms_ = 0;
+    std::optional<double> sample_ms_;
+    std::optional<long long> first_sound_ms_;
+    long long end_ms_ = 0;
+};
+
 } // namespace
 
 TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Track& track, const RunSettings& settings)
@@ -97,8 +169,10 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
                                          std::llround(track.fade_seconds.value_or(0.0) * kMsPerSecond)};
     }
 
-    const bool analyze = !run.timing && settings.lengths;
-    if (!analyze && !settings.coverage && !settings.reference)
+    // A timing that the profile sets gets its first sounds from the run.
+    const bool set_timing = run.timing.has_value();
+    const bool analyze = !set_timing && settings.lengths;
+    if (!set_timing && !analyze && !settings.coverage && !settings.reference)
     {
         return run;
     }
@@ -117,8 +191,10 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
     // frames of the length and the fade exactly.
     SampleHashes hashes;
     std::vector<uint64_t> frames_at_ms;
+    RunSounds run_sounds(set_timing ? run.timing->length_ms : 0);
     const auto on_samples = [&](std::span<const int16_t> samples)
     {
+        run_sounds.Add(renderer, samples);
         if (settings.reference)
         {
             hashes.Add(samples);
@@ -128,13 +204,25 @@ TrackRun RunTrack(const GameProfile& profile, const Snapshot& snapshot, const Tr
 
     if (analyze)
     {
-        run.timing = MeasureTrack(renderer, on_samples);
+        run.timing = MeasureTrack(renderer, on_samples, settings.limit);
     }
 
+    // A timing that the profile sets runs at least to the end of its length, and on to its first sample, up to the end
+    // of its fade.
     const RunSpan span = SpanOf(run.timing, settings);
-    while (renderer.Ms() < span.end_ms)
+    const auto set_timing_runs = [&]
+    {
+        const auto ms = static_cast<long long>(renderer.Ms());
+        return set_timing && (ms < run.timing->length_ms || (!run_sounds.Found() && renderer.Ms() < span.play_ms));
+    };
+    while (renderer.Ms() < span.end_ms || set_timing_runs())
     {
         on_samples(renderer.Next());
+    }
+
+    if (set_timing)
+    {
+        run_sounds.SetIn(*run.timing);
     }
 
     if (settings.reference)

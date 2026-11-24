@@ -6,16 +6,18 @@
 // RDRAM isn't trimmed by coverage. The legacy players' timing differs from the core's. In a legacy player, a game's
 // code can take paths that the core's runs never take. Those paths can read RDRAM words that the core's runs never
 // read. Such words would read as zero in a set trimmed that way. The library leaves out only the words of RDRAM that
-// are zero in the state. A player fills the state image with zeros before it loads a set, so those words read the same.
+// are zero in the state. A player fills the state image with zeros before it loads a set. Those words then read the
+// same.
 
 #pragma once
 
 #include <cstdint>
 #include <vector>
 
-#include "rip/snapshot.h"
 #include "ultralib/machine/coverage.h"
 #include "ultralib/machine/word_set.h"
+
+#include "rip/snapshot.h"
 #include "usf/usf_file.h"
 
 namespace usf::rip
@@ -42,7 +44,8 @@ struct SetSections
 };
 
 // The sections of a set of `tracks`. With `words`, one entry for each track, the ROM is trimmed, and the library's
-// state leaves out the words of RDRAM that are zero. Without it, the library holds the whole ROM and the whole state.
+// state leaves out the words of RDRAM that are zero. Without it, the library contains the whole ROM and the whole
+// state.
 SetSections BuildSet(const Snapshot& snapshot, const std::vector<Track>& tracks, const std::vector<TrackWords>* words);
 
 } // namespace usf::rip

@@ -5,14 +5,14 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The function at 0x80006E88 takes a song's number, 0 to 15, in a0. It asks for the song only while one of two flags
+// - The function at 0x80006E88 takes a song's number, 0 to 15, in a0. It requests the song only while one of two flags
 //   of the game's state is set. In stereo, the table at 0x8007C310 gives two effects of the music library for each
 //   song, one for each side. In mono, the table at 0x8007C490 gives one.
 // - The game's main loop calls the function at 0x8000663C once a frame. That function stops the song that plays and
 //   starts the first effect, at volume 0x80 and pan 0x80. In stereo it starts the second effect two frames later.
 // - Each effect plays one wave on one channel of the library. The game streams the wave from the cartridge through a
-//   ring buffer of four blocks of 0x400 bytes. The wave's loop repeats the song. The table of lengths holds where the
-//   second pass ends, measured from the cartridge reads of runs in usf's core. Songs 13 and 14 hold no loop. Song 15
+//   ring buffer of four blocks of 0x400 bytes. The wave's loop repeats the song. The table of lengths gives where the
+//   second pass ends, measured from the cartridge reads of runs in usf's core. Songs 13 and 14 have no loop. Song 15
 //   plays the same waves as song 0, and the set leaves it out.
 // - The game's scheduler thread reads the coin inputs once a frame, through the call at 0x800006CC. It reads them at
 //   0x02000007, through a TLB entry that the players refuse, and the thread faults. The ripper replaces the call with a
@@ -20,7 +20,7 @@
 //   frame, and the input thread (0x800B1EB8) reads the board's controls through one. The ripper stops both threads. The
 //   music runs in the music library's thread.
 // - The main loop waits for the next frame at 0x8000141C. The snapshot takes over the main loop there, at its 852nd
-//   arrival: 16.08 s after boot. The sample banks have loaded by then, and the attract mode asks for song 11 a few
+//   arrival: 16.08 s after boot. The sample banks have loaded by then, and the attract mode requests song 11 a few
 //   frames later.
 // - At each retrace the scheduler sends a message to its clients, at 0x8000081C, whether the game draws or not. The
 //   main thread (0x800E5410, priority 5) waits for them at 0x8000141C, through osRecvMesg at 0x8005FD20, on the queue
@@ -66,7 +66,6 @@ GameProfile Aleck64MagicalTetrisChallenge()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64E90, "7e357995def4078a54ba8e4486f361d631ff3329");
     profile.serial = "Aleck64 Magical Tetris Challenge";
-    profile.year = "1998";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.system = kSystemInputs;
 

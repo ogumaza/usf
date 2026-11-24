@@ -10,21 +10,21 @@
 //   starts the sequence at the volume that the table at 0x80333188 gives it (through 0x80320F68). The credits, sequence
 //   0x1A, are the exception: 0x80320F68 returns at 0x80320F94 for them before it reads the table, and they play at the
 //   85 that their script sets. For another player it starts the sequence through 0x80320544 at the volume that the
-//   sequence's script sets. Bit 7 of the sequence is its variation, which
-//   the sequence's script reads.
+//   sequence's script sets. Bit 7 of the sequence is its variation. The sequence's script reads it.
 // - The sound reset at 0x80322230 takes an audio set-up in a0, 0 to 7, from the table at 0x803332A0. The set-ups differ
-//   in their reverb and their number of voices. The levels' scripts start their music through 0x80249178, which resets
-//   the sound with the area's set-up and calls the play-music function for player 0. Set-up 7 is the credits'.
+//   in their reverb and their number of voices. The levels' scripts start their music through 0x80249178. That function
+//   resets the sound with the area's set-up and calls the play-music function for player 0. Set-up 7 is the credits'.
 // - The game's code starts the jingles on player 1, through the functions at 0x80322078 to 0x803221F4 and through the
 //   play-music function at 0x80258250. It starts the piranha plants' lullaby, the endless stairs and the merry-go-round
-//   on player 1 too, through 0x80321E48, which can also set player 1's volume through 0x8031E710. Near the
+//   on player 1 too, through 0x80321E48. That function can also set player 1's volume through 0x8031E710. Near the
 //   merry-go-round the volume is 78 (the call at 0x802C5C10).
-// - The game-loop tick at 0x8031FD84 takes no arguments. The sound thread then runs 0x803208EC once, which fades the
-//   channels of player 0 by the level and by where Mario is. The table of the levels' rules is at 0x80332FC4, by the
-//   level at 0x8032DDF8. A level's rules read Mario's position at 0x8033B1AC, the area at 0x8033BACA and the room at
-//   0x80361250. They pick an entry of the table at 0x80333060, which fades sets of channels in or out. The first entry
-//   after a sequence starts takes effect at once. Only Dire, Dire Docks, Jolly Roger Bay, Big Boo's Haunt, Hazy Maze
-//   Cave and Wet-Dry World have rules. A track that needs them gets its level and Mario's place in its mini.
+// - The game-loop tick at 0x8031FD84 takes no arguments. The sound thread then runs 0x803208EC once. That function
+//   fades the channels of player 0 by the level and by where Mario is. The table of the levels' rules is at 0x80332FC4,
+//   by the level at 0x8032DDF8. A level's rules read Mario's position at 0x8033B1AC, the area at 0x8033BACA and the
+//   room at 0x80361250. They pick an entry of the table at 0x80333060. The entry fades sets of channels in or out. The
+//   first entry after a sequence starts takes effect at once. Only Dire, Dire Docks, Jolly Roger Bay, Big Boo's Haunt,
+//   Hazy Maze Cave and Wet-Dry World have rules. A track that requires them gets its level and Mario's place in its
+//   mini.
 // - The sound reset at 0x80322230 returns to 0x802491D8 in the game thread. The first return comes before any music.
 // - The sequence player's script reader handles its jumps (commands 0xF5 and 0xF9 to 0xFB) at 0x8031DDD0 to 0x8031DE2C.
 //   At 0x8031DE28 the new script address is in t7 and the sequence player in s1. Players 0 and 1 are at 0x80222618 and
@@ -32,9 +32,9 @@
 // - The game thread waits for two retrace messages in each frame through osRecvMesg at 0x80322800, on the queue at
 //   0x8033B010. The sound effects' profile has the details.
 //
-// A track's number holds what the driver passes to the game's functions: the sequence in bits 0 to 7, the audio set-up
-// in bits 8 to 10, a sound reset in bit 11, player 1 in bit 12, a volume for player 1 in bit 13 with the volume in bits
-// 16 to 23, and a number that tells apart the tracks of one sequence in bits 24 to 27.
+// A track's number contains what the driver passes to the game's functions: the sequence in bits 0 to 7, the audio
+// set-up in bits 8 to 10, a sound reset in bit 11, player 1 in bit 12, a volume for player 1 in bit 13 with the volume
+// in bits 16 to 23, and a number that distinguishes the tracks of one sequence in bits 24 to 27.
 
 #include <vector>
 
@@ -60,7 +60,7 @@ constexpr uint32_t kPlayer0 = 0x80222618;
 constexpr uint32_t kPlayer1 = 0x80222758;
 
 // The words that the levels' rules read. The level and the room are the upper halves of their words, and the area the
-// lower half of its word. At the snapshot the other halves hold 0.
+// lower half of its word. At the snapshot the other halves are 0.
 constexpr uint32_t kLevelWord = 0x8032DDF8;
 constexpr uint32_t kAreaWord = 0x8033BAC8;
 constexpr uint32_t kRoomWord = 0x80361250;
@@ -106,17 +106,14 @@ struct Piece
     uint32_t volume;  // Player 1's volume, or 0 for the sequence's.
     uint32_t variant; // Tells apart the tracks of one sequence.
     Place place;
-
-    // The state that the track plays, added to the sequence name. Null for none.
-    const char* detail;
 };
 
-// Each mini that needs the levels' rules puts Mario in one place, which picks its arrangement. At the snapshot, Mario
-// is at (0, 0, 0) in area 1 and room 0, and the level is 1, which has no rules. The rules and the places:
+// Each mini that requires the levels' rules puts Mario in one place. The place picks its arrangement. At the snapshot,
+// Mario is at (0, 0, 0) in area 1 and room 0, and the level is 1. Level 1 has no rules. The rules and the places:
 // - Dire, Dire Docks (level 23). In area 1 with x under -800, or with y of -2000 or more and x under 470, channels 0,
 //   1, 6, 9, 10 and 11 fade out. In area 2 with y of 100 or more, every channel plays. Anywhere else, channels 6, 9, 10
 //   and 11 fade out. The minis use area 1 at (0, 0, 0), area 2 at (0, 0, 0) and area 2 at a height of 100. Jolly Roger
-//   Bay's rules pick the same three arrangements with the same set-up, so they make no other tracks.
+//   Bay's rules pick the same three arrangements with the same set-up. They make no other tracks.
 // - Big Boo's Haunt (level 4). In rooms 10 and 13, channels 4 to 6 fade out. Elsewhere every channel plays. The minis
 //   use room 0 and room 13.
 // - Hazy Maze Cave (level 7). Channel 3 fades out where x is 0 or more and y is under -203, and where x is under 0 and
@@ -128,61 +125,55 @@ struct Piece
 //
 // The set-ups follow the levels' scripts. The jingles and the cap and event music play in the set-up of whatever level
 // the player is in. Those tracks use set-up 0, the set-up of most levels, unless they play in one place only. Set-ups 5
-// and 6 have the reverbs of 0 and 1, so 0 and 1 also stand for the levels with set-ups 5 and 6.
-// The names of the sequences with no name in ultralib's table.
-constexpr SongName kSetSongNames[] = {
-    {0x05, "water levels"},
-    {0x0A, "Big Boo's Haunt"},
-    {0x0C, "underground levels"},
-};
+// and 6 have the reverbs of 0 and 1. 0 and 1 therefore also stand for the levels with set-ups 5 and 6.
 
 // clang-format off
 const Piece kPieces[] = {
-    {0x01, 0, true,  0,  0, {}, nullptr},
-    {0x02, 0, false, 0,  0, {}, nullptr},
-    {0x02 | kVariation, 0, false, 0, 0, {}, "with the variation, after a game over"},
-    {0x03, 0, false, 0,  0, {}, nullptr},
-    {0x04, 1, false, 0,  0, {}, nullptr},
-    {0x05, 3, false, 0,  0, {.level = kLevelDireDireDocks, .area = 1}, "without channels 0, 1, 6, 9, 10 and 11"},
-    {0x05, 3, false, 0,  1, {.level = kLevelDireDireDocks, .area = 2}, "without channels 6, 9, 10 and 11"},
-    {0x05, 3, false, 0,  2, {.level = kLevelDireDireDocks, .area = 2, .height = kHeight100}, "all channels"},
-    {0x05 | kVariation, 3, false, 0, 0, {}, "with the variation, in the Secret Aquarium"},
-    {0x06, 0, false, 0,  0, {}, nullptr},
-    {0x06, 4, false, 0,  1, {}, "inside the volcano"},
-    {0x07, 2, false, 0,  0, {}, nullptr},
-    {0x08, 0, false, 0,  0, {}, nullptr},
-    {0x09, 1, false, 0,  0, {}, nullptr},
-    {0x09, 0, false, 0,  1, {}, "in Rainbow Ride and three secret courses"},
-    {0x0A, 6, false, 0,  0, {.level = kLevelBigBoosHaunt}, "indoors"},
-    {0x0A, 6, false, 0,  1, {.level = kLevelBigBoosHaunt, .room = 13}, "outdoors"},
-    {0x0B, 0, true,  0,  0, {}, nullptr},
-    {0x0C, 4, false, 0,  0, {}, "all channels"},
-    {0x0C, 4, false, 0,  1, {.level = kLevelHazyMazeCave}, "without channel 8"},
-    {0x0C, 4, false, 0,  2, {.level = kLevelHazyMazeCave, .height = kHeightMinus300}, "without channel 3"},
-    {0x0C, 3, false, 0,  3, {.level = kLevelWetDryWorld, .area = 1}, "without channel 8, in Wet-Dry World"},
-    {0x0C, 3, false, 0,  4, {.level = kLevelWetDryWorld, .area = 2}, "without channel 3, in Wet-Dry World"},
-    {0x0D, 0, false, 0,  0, {}, nullptr},
-    {0x0E, 0, false, 0,  0, {}, nullptr},
-    {0x0F, 0, false, 0,  0, {}, nullptr},
-    {0x10, 0, true,  0,  0, {}, nullptr},
-    {0x11, 0, false, 0,  0, {}, nullptr},
-    {0x12, 0, true,  0,  0, {}, nullptr},
-    {0x13, 6, true,  78, 0, {}, nullptr},
-    {0x14, 0, true,  0,  0, {}, nullptr},
-    {0x15, 0, true,  0,  0, {}, nullptr},
-    {0x16, 0, false, 0,  0, {}, nullptr},
-    {0x17, 2, true,  0,  0, {}, nullptr},
-    {0x18, 1, true,  0,  0, {}, nullptr},
-    {0x19, 2, false, 0,  0, {}, nullptr},
-    {0x1A, 7, false, 0,  0, {}, nullptr},
-    {0x1B, 0, true,  0,  0, {}, nullptr},
-    {0x1C, 1, true,  0,  0, {}, nullptr},
-    {0x1D, 0, false, 0,  0, {}, nullptr},
-    {0x1E, 0, false, 0,  0, {}, nullptr},
-    {0x1F, 2, false, 0,  0, {}, nullptr},
-    {0x20, 0, false, 0,  0, {}, nullptr},
-    {0x21, 0, false, 0,  0, {}, nullptr},
-    {0x22, 0, false, 0,  0, {}, nullptr},
+    {0x01, 0, true,  0,  0, {}},
+    {0x02, 0, false, 0,  0, {}},
+    {0x02 | kVariation, 0, false, 0, 0, {}}, // With the variation, after a game over.
+    {0x03, 0, false, 0,  0, {}},
+    {0x04, 1, false, 0,  0, {}},
+    {0x05, 3, false, 0,  0, {.level = kLevelDireDireDocks, .area = 1}}, // Without channels 0, 1, 6, 9, 10 and 11.
+    {0x05, 3, false, 0,  1, {.level = kLevelDireDireDocks, .area = 2}}, // Without channels 6, 9, 10 and 11.
+    {0x05, 3, false, 0,  2, {.level = kLevelDireDireDocks, .area = 2, .height = kHeight100}}, // All channels.
+    {0x05 | kVariation, 3, false, 0, 0, {}}, // With the variation, in the Secret Aquarium.
+    {0x06, 0, false, 0,  0, {}},
+    {0x06, 4, false, 0,  1, {}}, // Inside the volcano.
+    {0x07, 2, false, 0,  0, {}},
+    {0x08, 0, false, 0,  0, {}},
+    {0x09, 1, false, 0,  0, {}},
+    {0x09, 0, false, 0,  1, {}}, // In Rainbow Ride and three secret courses.
+    {0x0A, 6, false, 0,  0, {.level = kLevelBigBoosHaunt}}, // Indoors.
+    {0x0A, 6, false, 0,  1, {.level = kLevelBigBoosHaunt, .room = 13}}, // Outdoors.
+    {0x0B, 0, true,  0,  0, {}},
+    {0x0C, 4, false, 0,  0, {}}, // All channels.
+    {0x0C, 4, false, 0,  1, {.level = kLevelHazyMazeCave}}, // Without channel 8.
+    {0x0C, 4, false, 0,  2, {.level = kLevelHazyMazeCave, .height = kHeightMinus300}}, // Without channel 3.
+    {0x0C, 3, false, 0,  3, {.level = kLevelWetDryWorld, .area = 1}}, // Without channel 8, in Wet-Dry World.
+    {0x0C, 3, false, 0,  4, {.level = kLevelWetDryWorld, .area = 2}}, // Without channel 3, in Wet-Dry World.
+    {0x0D, 0, false, 0,  0, {}},
+    {0x0E, 0, false, 0,  0, {}},
+    {0x0F, 0, false, 0,  0, {}},
+    {0x10, 0, true,  0,  0, {}},
+    {0x11, 0, false, 0,  0, {}},
+    {0x12, 0, true,  0,  0, {}},
+    {0x13, 6, true,  78, 0, {}},
+    {0x14, 0, true,  0,  0, {}},
+    {0x15, 0, true,  0,  0, {}},
+    {0x16, 0, false, 0,  0, {}},
+    {0x17, 2, true,  0,  0, {}},
+    {0x18, 1, true,  0,  0, {}},
+    {0x19, 2, false, 0,  0, {}},
+    {0x1A, 7, false, 0,  0, {}},
+    {0x1B, 0, true,  0,  0, {}},
+    {0x1C, 1, true,  0,  0, {}},
+    {0x1D, 0, false, 0,  0, {}},
+    {0x1E, 0, false, 0,  0, {}},
+    {0x1F, 2, false, 0,  0, {}},
+    {0x20, 0, false, 0,  0, {}},
+    {0x21, 0, false, 0,  0, {}},
+    {0x22, 0, false, 0,  0, {}},
 };
 // clang-format on
 
@@ -237,7 +228,6 @@ GameProfile NusNsmeUsaMusic()
     profile.serial = "NUS-NSME-USA";
     profile.sha1 = "9bef1128717f958171a4afac3ed78ee2bb4e86ce";
     profile.set = "music";
-    profile.year = "1996";
     profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
 
@@ -296,9 +286,7 @@ GameProfile NusNsmeUsaMusic()
         Track track;
         track.number = TrackNumber(piece);
         const uint32_t sequence = piece.sequence & ~kVariation;
-        track.name =
-            SongTitle("Sequence", sequence, TitleBase::kHex,
-                      FindSongName(kSetSongNames, ultralib::n64::kSuperMario64SongNames, sequence), piece.detail);
+        track.name = NumberTitle("Sequence", sequence, TitleBase::kHex);
         track.rdram_patches = PlacePatches(piece.place);
         profile.tracks.push_back(track);
     }

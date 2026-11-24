@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: MIT
 
-// The Legend of Zelda: Majora's Mask (USA): the game's music. The game has no sound test. Each title names the place or
-// the event where the game plays the sequence.
+// The Legend of Zelda: Majora's Mask (USA): the game's music. The game has no sound test.
 //
-// Addresses come from the game's code in the image and from runs in usf's core. The game requires the CIC-NUS-6105's
-// answers, which come from a dump of the console's PIF ROM: usfrip --pif FILE. It also requires the Expansion Pak, so
-// the set holds 8 MB of RDRAM.
+// Addresses come from the game's code in the image and from runs in usf's core. The game requires the answers of the
+// CIC-NUS-6105. They come from a dump of the console's PIF ROM: usfrip --pif FILE. It also requires the Expansion Pak.
+// The set therefore has 8 MB of RDRAM.
 //
-// - The sequence table at 0x801E1630 holds 128 sequences. Sequence 0 holds the sound effects. Sequences 0x23, 0x28,
-//   0x56, 0x60 and 0x61 point to sequences 0x16, 0x18, 0x3C, 0x57 and 0x51, so the set leaves them out. Sequence 0x01
-//   holds ambience and stays silent until the game's code sets its ports. Sequence 0x7A makes no sound. The set leaves
-//   both out.
+// - The sequence table at 0x801E1630 contains 128 sequences. Sequence 0 contains the sound effects. Sequences 0x23,
+//   0x28, 0x56, 0x60 and 0x61 point to sequences 0x16, 0x18, 0x3C, 0x57 and 0x51. The set leaves them out. Sequence
+//   0x01 contains ambience and stays silent until the game's code sets its ports. Sequence 0x7A makes no sound. The set
+//   leaves both out.
 // - The function at 0x801A89A8 takes a 32-bit command in a0 and queues it for the audio update. Command 0x000000NN
 //   starts sequence NN on sequence player 0. Command 0xE0000000 sets stereo output. When a scene's music starts, the
-//   function at 0x801A25E4 follows that command with 0x7004000V, which writes the day minus 1 to the player's port 4.
-//   The function at 0x800FB758 limits the value to 0 to 2. A sequence's start sets every port to -1, and port 4 of
-//   player 0 is at 0x8020522C. The profile sends the same commands.
-// - Sequences 0x15 to 0x17 hold Clock Town's three days. The game starts sequence 0x1D, which plays one of them for the
-//   day in the port. The set reaches them through sequence 0x1D and leaves them out alone.
+//   function at 0x801A25E4 follows that command with 0x7004000V. That command writes the day minus 1 to the player's
+//   port 4. The function at 0x800FB758 limits the value to 0 to 2. A sequence's start sets every port to -1, and port 4
+//   of player 0 is at 0x8020522C. The profile sends the same commands.
+// - Sequences 0x15 to 0x17 contain Clock Town's three days. The game starts sequence 0x1D. That sequence plays one of
+//   them for the day in the port. The set reaches them through sequence 0x1D and leaves them out alone.
 // - Runs of the game in usf's core, with sequence 0x4D or 0x54 patched in at 0x801A25F4 and 0x801A2640, write 0 to port
 //   4. The first-day tracks of those sequences write 0 there too. With -1 in the port, sequence 0x54 falls silent
 //   partway through.
 // - The game thread (entry 0x801748A0) calls the frame function at 0x80174868 once a frame. That function's work ends
-//   with a call of the audio update at 0x8019E014, which reads the queue. Gameplay has a frame of three video fields.
+//   with a call of the audio update at 0x8019E014. The audio update reads the queue. Gameplay has a frame of three
+//   video fields.
 // - The snapshot takes over the game thread at the frame function's first call. Later calls aren't quiet: the audio
 //   thread keeps AI's second buffer waiting.
 // - The game's interrupt manager at 0x80099EF0 sends a message to each of its clients at every retrace, at 0x80081390,
@@ -61,7 +61,7 @@ constexpr uint32_t kSequenceScriptState = 0x80205148;
 
 constexpr uint32_t kSetStereo = 0xE0000000;
 
-// A track's number holds the day's port value above the sequence's number.
+// A track's number contains the day's port value above the sequence's number.
 constexpr uint32_t kDayShift = 8;
 constexpr uint32_t kDayMask = 0xFF00;
 constexpr uint32_t kAllMask = 0xFFFF;
@@ -73,7 +73,7 @@ constexpr uint32_t kSetPort7 = 0x70070000;
 constexpr uint32_t kSetChannelVolume = 0x60030000;
 constexpr uint32_t kChannelShift = 8;
 
-// The end of the Expansion Pak's memory. Runs of the game hold zeros there.
+// The end of the Expansion Pak's memory. Runs of the game leave zeros there.
 constexpr uint32_t kDriverAddress = 0x807FF000;
 
 // The driver's retrace client, 3 KB after the driver's start. The driver must end before it. Setting `end` to it
@@ -88,7 +88,6 @@ struct DayVersion
 {
     uint32_t sequence;
     uint32_t day;
-    const char* name;
 
     constexpr uint32_t Number() const
     {
@@ -97,11 +96,11 @@ struct DayVersion
 };
 
 constexpr DayVersion kDayVersions[] = {
-    {0x1D, 1, "Sequence 0x1D: Clock Town, second day"},
-    {0x1D, 2, "Sequence 0x1D: Clock Town, third day"},
-    {0x4D, 1, "Sequence 0x4D: New Wave Bossa Nova, second and third days"},
-    {0x54, 1, "Sequence 0x54: Ballad of the Wind Fish, second day"},
-    {0x54, 2, "Sequence 0x54: Ballad of the Wind Fish, third day"},
+    {0x1D, 1}, // Clock Town, second day.
+    {0x1D, 2}, // Clock Town, third day.
+    {0x4D, 1}, // New Wave Bossa Nova, second and third days.
+    {0x54, 1}, // Ballad of the Wind Fish, second day.
+    {0x54, 2}, // Ballad of the Wind Fish, third day.
 };
 
 // The sequences whose first day sounds different with 0 in port 4 and with -1. Their first-day tracks get
@@ -109,20 +108,19 @@ constexpr DayVersion kDayVersions[] = {
 constexpr uint32_t kFirstDaySequences[] = {0x4D, 0x54};
 
 // Tracks whose minis turn the driver's two day calls into other commands. Each call then fires for every track whose
-// number holds no day. 0 leaves a call as it is.
+// number contains no day. 0 leaves a call as it is.
 //
 // - The function at 0x800FB758 calls 0x801A2544 in place of 0x801A25E4 when the time is from 0x4000 to 0xB71C and the
 //   byte at 0x801BDBC8 isn't 0. That function sends 0x70000001 as well as the day. Sequences 0x02 and 0x1D read port 0
 //   and play a dawn piece for 1. A probe of all the sequences found no other that reads port 0.
 // - The function at 0x801A36F0 sets the volumes of Romani Ranch's channels by Link's distance from Romani: channels 0
-//   and 1 hold her voice, and channel 13 a melody. Within 200 units the melody is at 0. Beyond 2000 units her voice is
+//   and 1 play her voice, and channel 13 a melody. Within 200 units the melody is at 0. Beyond 2000 units her voice is
 //   at 0. In between is a mix. On each day, the state beyond 2000 units plays as the track without the commands does.
 //   The set leaves that state out.
 struct CommandVersion
 {
     uint32_t sequence;
     uint32_t commands[2];
-    const char* name;
 };
 
 constexpr uint32_t ChannelVolume(uint32_t channel, uint32_t volume)
@@ -131,12 +129,12 @@ constexpr uint32_t ChannelVolume(uint32_t channel, uint32_t volume)
 }
 
 constexpr CommandVersion kCommandVersions[] = {
-    {0x02, {kSetDawnPort, kSetDayPort}, "Sequence 0x02: Termina Field, at dawn"},
-    {0x1D, {kSetDawnPort, kSetDayPort}, "Sequence 0x1D: Clock Town, dawn of the first day"},
-    {0x1D, {kSetDawnPort, kSetDayPort | 1}, "Sequence 0x1D: Clock Town, dawn of the second day"},
-    {0x1D, {kSetDawnPort, kSetDayPort | 2}, "Sequence 0x1D: Clock Town, dawn of the third day"},
-    {0x2F, {ChannelVolume(13, 0), 0}, "Sequence 0x2F: Romani Ranch, close to Romani"},
-    {0x18, {kSetPort7 | 1, 0}, "Sequence 0x18: file select, without the harp's introduction"},
+    {0x02, {kSetDawnPort, kSetDayPort}},     // Termina Field, at dawn.
+    {0x1D, {kSetDawnPort, kSetDayPort}},     // Clock Town, dawn of the first day.
+    {0x1D, {kSetDawnPort, kSetDayPort | 1}}, // Clock Town, dawn of the second day.
+    {0x1D, {kSetDawnPort, kSetDayPort | 2}}, // Clock Town, dawn of the third day.
+    {0x2F, {ChannelVolume(13, 0), 0}},       // Romani Ranch, close to Romani.
+    {0x18, {kSetPort7 | 1, 0}},              // The file select, without the harp's introduction.
 };
 
 // The fanfares that play a song back once Link has played it. The function at 0x801A3000 starts the fanfare and writes
@@ -144,40 +142,16 @@ constexpr CommandVersion kCommandVersions[] = {
 // Link, 0x5D for Zora Link and 0x5E for Deku Link. These fourteen sequences read port 7. With 0x35 in the port, they
 // play as they do with -1. The other three values change what plays. Each form gets a track, and the track without a
 // value plays Link's version. The scene's function writes 1 to port 7 for sequence 0x18, and -1 for sequence 0x28, the
-// Fairy Fountain, which points to 0x18. Runs of the two play differently from the start.
-struct Form
-{
-    uint32_t value;
-    const char* name;
-};
-
-constexpr Form kForms[] = {{0x5C, ", as Goron Link"}, {0x5D, ", as Zora Link"}, {0x5E, ", as Deku Link"}};
+// Fairy Fountain. That sequence points to 0x18. Runs of the two play differently from the start.
+constexpr uint32_t kForms[] = {0x5C, 0x5D, 0x5E};
 
 constexpr uint32_t kSongFanfares[] = {0x32, 0x33, 0x34, 0x35, 0x47, 0x48, 0x49,
                                       0x4A, 0x51, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
 
-// The sequences with a name in ultralib's table that the set leaves out: the ambience of 0x01, and Clock Town's days.
-// The set reaches the days through sequence 0x1D.
-constexpr uint32_t kLeftOut[] = {0x01, 0x15, 0x16, 0x17};
-
-// The set makes a track for each name in ultralib's table, apart from kLeftOut. A new name there adds a track. Compare
-// usfrip --list, then update the count.
-static_assert(ultralib::n64::kMajorasMaskSongNames.size() == 121);
-
-// The set's names of four sequences. Each names the state that the track plays. ultralib's table names every use of
-// the sequence instead.
-constexpr SongName kSetSongNames[] = {
-    {0x18, "Fairy Fountain"},
-    {0x1D, "Clock Town, first day"},
-    {0x4D, "New Wave Bossa Nova, first day"},
-    {0x54, "Ballad of the Wind Fish, first day"},
-};
-
-// The name of sequence `number`, or null.
-const char* SequenceName(uint32_t number)
-{
-    return FindSongName(kSetSongNames, ultralib::n64::kMajorasMaskSongNames, number);
-}
+// The sequences of the table, and those that the set leaves out: the ambience of 0x01, Clock Town's days, the five
+// sequences that point to others, and the silent 0x7A. The set reaches the days through sequence 0x1D.
+constexpr uint32_t kSequences = 0x80;
+constexpr uint32_t kLeftOut[] = {0x01, 0x15, 0x16, 0x17, 0x23, 0x28, 0x56, 0x60, 0x61, 0x7A};
 
 // The driver's calls send days 1 and 2. These patches change the call for day 2 into a call for day 0, in the minis of
 // the first-day tracks that require the command. A further call in the driver would change the library and every mini.
@@ -190,7 +164,7 @@ std::vector<RdramPatch> FirstDayPatches(const Driver& driver)
             DriverWordPatch(driver, mips::Ori(mips::kA0, mips::kA0, kDay2), mips::Ori(mips::kA0, mips::kA0, 0))};
 }
 
-// The patches that make the driver's call for `day` queue `command` for every track whose number holds no day.
+// The patches that make the driver's call for `day` queue `command` for every track whose number contains no day.
 std::vector<RdramPatch> DayCallPatches(const Driver& driver, uint32_t day, uint32_t command)
 {
     const RdramPatch match =
@@ -210,13 +184,12 @@ std::vector<RdramPatch> DayCallPatches(const Driver& driver, uint32_t day, uint3
     return {match, {.address = upper, .words = {mips::Lui(mips::kA0, command >> 16), lower.words[0]}}};
 }
 
-// Adds a track for each sequence with a name, apart from kLeftOut. The first-day tracks of kFirstDaySequences get
+// Adds a track for each sequence, apart from kLeftOut. The first-day tracks of kFirstDaySequences get
 // FirstDayPatches.
 void AddTitleTracks(const Driver& driver, std::vector<Track>& tracks)
 {
-    for (const SongName& song : ultralib::n64::kMajorasMaskSongNames)
+    for (uint32_t number = 1; number < kSequences; number++)
     {
-        const auto number = static_cast<uint32_t>(song.index);
         if (std::ranges::find(kLeftOut, number) != std::end(kLeftOut))
         {
             continue;
@@ -224,7 +197,7 @@ void AddTitleTracks(const Driver& driver, std::vector<Track>& tracks)
 
         Track track;
         track.number = number;
-        track.name = SongTitle("Sequence", number, TitleBase::kHex, SequenceName(number));
+        track.name = NumberTitle("Sequence", number, TitleBase::kHex);
         if (std::ranges::find(kFirstDaySequences, number) != std::end(kFirstDaySequences))
         {
             track.rdram_patches = FirstDayPatches(driver);
@@ -240,7 +213,7 @@ void AddDayVersionTracks(std::vector<Track>& tracks)
     {
         Track track;
         track.number = version.Number();
-        track.name = version.name;
+        track.name = NumberTitle("Sequence", version.sequence, TitleBase::kHex);
         tracks.push_back(track);
     }
 }
@@ -252,7 +225,7 @@ void AddCommandVersionTracks(const Driver& driver, std::vector<Track>& tracks)
     {
         Track track;
         track.number = version.sequence;
-        track.name = version.name;
+        track.name = NumberTitle("Sequence", version.sequence, TitleBase::kHex);
         for (uint32_t day = 1; day <= 2; day++)
         {
             const uint32_t command = version.commands[day - 1];
@@ -271,18 +244,12 @@ void AddFanfareTracks(const Driver& driver, std::vector<Track>& tracks)
 {
     for (const uint32_t sequence : kSongFanfares)
     {
-        const char* name = SequenceName(sequence);
-        if (name == nullptr)
-        {
-            throw std::logic_error("a song's fanfare in Majora's Mask has no name");
-        }
-
-        for (const Form& form : kForms)
+        for (const uint32_t form : kForms)
         {
             Track track;
             track.number = sequence;
-            track.name = SongTitle("Sequence", sequence, TitleBase::kHex, name) + form.name;
-            track.rdram_patches = DayCallPatches(driver, 1, kSetPort7 | form.value);
+            track.name = NumberTitle("Sequence", sequence, TitleBase::kHex);
+            track.rdram_patches = DayCallPatches(driver, 1, kSetPort7 | form);
             tracks.push_back(track);
         }
     }
@@ -296,7 +263,6 @@ GameProfile NusNzseUsa()
     profile.game = "The Legend of Zelda: Majora's Mask";
     profile.serial = "NUS-NZSE-USA";
     profile.sha1 = "d6133ace5afaa0882cf214cf88daba39e266c078";
-    profile.year = "2000";
     profile.cic = ultralib::machine::Cic::k6105;
     profile.sound_driver = "Majora's Mask sound engine";
     profile.controller = true;

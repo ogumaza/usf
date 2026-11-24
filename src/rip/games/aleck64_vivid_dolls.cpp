@@ -5,7 +5,7 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The sequence file at cartridge offset 0x1D7720 holds 15 sequences.
+// - The sequence file at cartridge offset 0x1D7720 contains 15 sequences.
 // - The function at 0x8000D1CC takes a sequence's number in a0. It stops the song that plays, reads the sequence from
 //   the cartridge and starts it. The game's function at 0x8001BBC0 plays songs 0 to 5 as sequences 0 to 5, and finds
 //   the sequences of the others in the table at 0x8003A240.
@@ -45,7 +45,6 @@ GameProfile Aleck64VividDolls()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "747e9420cce23ff82b5922cd91ec43272d03fa4f");
     profile.serial = "Aleck64 Vivid Dolls";
-    profile.year = "1998";
     profile.sound_driver = kCompressedSequencePlayer;
 
     profile.snapshot_address = kMessageWait;

@@ -91,7 +91,7 @@ bool Player::RunStep()
 {
     system_->Run(OutputClock::SliceTicks(system_->TicksPerSecond()));
 
-    // Output that has stopped is filled with silence, so that time goes on in the output too.
+    // Silence fills output that has stopped. Time then goes on in the output too.
     const uint64_t silence = clock_.TakeSilence(system_->Now(), silence_rate_, system_->TicksPerSecond());
     if (silence > 0)
     {

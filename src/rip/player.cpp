@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "ultralib/machine/bits.h"
+#include "xsflib/bytes.h"
+
 #include "usf/track.h"
 
 namespace usf::rip
@@ -114,7 +116,7 @@ void TrackPlayer::RunSlice()
         }
     }
 
-    // Output that has stopped is filled with silence up to the present, at the latest rate. Before the game's first
+    // Silence fills output that has stopped, up to the current time, at the latest rate. Before the game's first
     // buffer, that's the rate that the state's DACRATE gives.
     const uint32_t rate = !queue_.empty() ? queue_.back().rate : (rate_ != 0 ? rate_ : system_.AudioSampleRate());
     const uint64_t silence = clock_.TakeSilence(system_.Now(), rate, system_.TicksPerSecond());
@@ -147,9 +149,7 @@ void SampleHashes::Add(std::span<const int16_t> samples)
         std::vector<uint8_t> bytes(2 * take);
         for (size_t i = 0; i < take; i++)
         {
-            const auto sample = static_cast<uint16_t>(samples[pos + i]);
-            bytes[2 * i] = static_cast<uint8_t>(sample & 0xFF);
-            bytes[2 * i + 1] = static_cast<uint8_t>(sample >> 8);
+            xsflib::StoreLe16(bytes.data() + 2 * i, static_cast<uint16_t>(samples[pos + i]));
         }
 
         block_.Update(bytes);

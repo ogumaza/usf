@@ -5,11 +5,10 @@
 #include <algorithm>
 #include <cstring>
 
-#include "xsflib/bytes.h"
-#include "xsflib/psf/set.h"
-
 #include "ultralib/machine/constants.h"
 #include "ultralib/machine/save_state.h"
+#include "xsflib/bytes.h"
+#include "xsflib/psf/set.h"
 
 namespace usf
 {
@@ -171,7 +170,7 @@ private:
                     return "a ROM chunk runs past the end of cartridge space";
                 }
 
-                // Whole words, so that the reordering at the end stays inside the image.
+                // Whole words. The reordering at the end then stays inside the image.
                 const size_t size = static_cast<size_t>((end + 3) & ~uint64_t{3});
                 if (rom_.size() < size)
                 {

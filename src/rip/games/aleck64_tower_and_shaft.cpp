@@ -5,7 +5,7 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The function at 0x800392F4 takes a song's number, 0 to 18, in a0. It asks for the song only while one of two flags
+// - The function at 0x800392F4 takes a song's number, 0 to 18, in a0. It requests the song only while one of two flags
 //   of the game's state is set. It stops the songs that play.
 // - The game's scenes call the function at 0x8003919C once a frame. A frame after the request, that function reads the
 //   song's file from the cartridge to 0x8011DE60 through the tables at 0x8010EB90 and 0x8010EBDC, and starts it. In
@@ -59,7 +59,6 @@ GameProfile Aleck64TowerAndShaft()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "ba4474dc4967adb2a41cf3b0022c6215990c0e64");
     profile.serial = "Aleck64 Tower & Shaft";
-    profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.system = kSystemInputs;
 

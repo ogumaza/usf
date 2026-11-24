@@ -3,7 +3,7 @@
 // The player on small programs made with the MIPS encoder. The anchor of the checks is the arithmetic of the programs
 // and the AI's registers: the samples that a program writes, and a rate of the video clock over DACRATE + 1.
 //
-// The main program takes a start value in a0 and plays buffers of 256 frames. Frame n of the stream holds start + n on
+// The main program takes a start value in a0 and plays buffers of 256 frames. Frame n of the stream has start + n on
 // the left and start + n + 1 on the right. Each buffer starts when the one before has ended. The program changes the
 // rate between two buffers, and later stops sending buffers. The second program measures how long the AI stays busy,
 // for a check of the flags.
@@ -15,6 +15,10 @@
 #include <string>
 #include <vector>
 
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "xsflib/bytes.h"
 #include "xsflib/files.h"
 #include "xsflib/player/player.h"
@@ -25,9 +29,6 @@
 
 #include "rip/mips.h"
 #include "test_mips.h"
-#include "ultralib/machine/save_state.h"
-#include "ultralib/machine/system.h"
-#include "ultralib/testing/test_programs.h"
 #include "usf/usf_file.h"
 
 namespace
@@ -61,13 +62,12 @@ constexpr uint32_t kFramesBeforeStop = kBuffersBeforeStop * kFramesPerBuffer;
 
 constexpr uint32_t kDacRateFirst = 1520;
 constexpr uint32_t kDacRateSecond = 2204;
-constexpr uint32_t kVideoClock = 48681812;
-constexpr uint32_t kRateFirst = kVideoClock / (kDacRateFirst + 1);
-constexpr uint32_t kRateSecond = kVideoClock / (kDacRateSecond + 1);
+constexpr auto kRateFirst = static_cast<uint32_t>(ultralib::machine::kVideoClockNtsc / (kDacRateFirst + 1));
+constexpr auto kRateSecond = static_cast<uint32_t>(ultralib::machine::kVideoClockNtsc / (kDacRateSecond + 1));
 
 constexpr uint16_t kStart = 0x1200;
 
-// Each buffer: frame i holds the counter + i on the left and one more on the right.
+// Each buffer: frame i has the counter + i on the left and one more on the right.
 void EmitCountingBuffer(mips::Assembler& code)
 {
     code.Emit(mips::Lui(kT0, mips::High(kKseg0 | kBuffer)));
@@ -161,7 +161,7 @@ void EmitCap(mips::Assembler& code)
     code.SetBranchTarget(below_cap, code.Here());
 }
 
-// A buffer whose samples hold the count in s0, handed to the AI. The AI then stays quiet.
+// A buffer whose samples are the count in s0, handed to the AI. The AI then stays quiet.
 void EmitCountBuffer(mips::Assembler& code)
 {
     code.Emit(mips::Sll(kT2, kS0, 16));
@@ -183,7 +183,7 @@ void EmitCountBuffer(mips::Assembler& code)
     code.Emit(mips::kNop);
 }
 
-// One buffer, then a count in s0 of the times that the AI read as busy, then a buffer of samples that hold that count,
+// One buffer, then a count in s0 of the times that the AI read as busy, then a buffer of samples that are that count,
 // capped at 0x7FFF. The AI then stays quiet.
 std::vector<uint32_t> MakeBusyProgram()
 {
@@ -196,7 +196,8 @@ std::vector<uint32_t> MakeBusyProgram()
     return code.Words();
 }
 
-// A library that holds the ROM and the state, and a mini that holds kStart in a0, the tags and a link to the library.
+// A library that contains the ROM and the state, and a mini that sets kStart in a0 and contains the tags and a link to
+// the library.
 class TestSet
 {
 public:

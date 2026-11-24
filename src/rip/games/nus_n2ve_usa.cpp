@@ -5,7 +5,7 @@
 // Addresses come from the game's code in the image and from runs in usf's core. The main segment is copied from
 // cartridge offset 0x1000 to 0x80025C00.
 //
-// - The sequence file at cartridge offset 0x120190 holds 24 sequences.
+// - The sequence file at cartridge offset 0x120190 contains 24 sequences.
 // - The song-select function at 0x8003BE10 takes the song in a0 and the player in a1. It stops the player, sets bit 1
 //   of the player's flags at offset 0x17C and leaves the song in the request words at 0x80169088. The players'
 //   structures start at 0x801A0A10, 0x188 bytes each.
@@ -14,7 +14,7 @@
 // - The game makes no sound until it gets a press of A. In a run that pressed A at intervals, the first song to play
 //   was sequence 0x0D. Sequence 0x10 followed, from the code of six menu screens.
 // - A stage's song comes from the table of halfwords at 0x800EC430, through 0x800286D4.
-// - The image holds two copies of libultra's sequence reader. The players use the one that stores the jump back to a
+// - The image contains two copies of libultra's sequence reader. The players use the one that stores the jump back to a
 //   loop at 0x800CF48C, with the new read pointer in t7 and the track in t3. The other, with its store at 0x800E8C4C,
 //   plays nothing here.
 
@@ -47,14 +47,13 @@ GameProfile NusN2veUsa()
     profile.game = "Chameleon Twist 2";
     profile.serial = "NUS-N2VE-USA";
     profile.sha1 = "9fa379d66b218228da3cbf386c91d857c677f489";
-    profile.year = "1999";
     profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
 
-    // No song plays before a press of A, so the snapshot comes in the audio thread during the first screens. The game
-    // thread stops, so that the game requests no other song. The patch and the selector make the update start the
-    // track's song in that audio frame, as the song-select function would.
+    // No song plays before a press of A. The snapshot therefore comes in the audio thread during the first screens. The
+    // profile stops the game thread. The game then can't request another song. The patch and the selector make the
+    // update start the track's song in that audio frame, as the song-select function would.
     profile.snapshot_address = kAudioFrameUpdate;
     profile.snapshot_hit = 100;
     profile.quiet_tries = 120;
@@ -69,8 +68,7 @@ GameProfile NusN2veUsa()
 
     for (uint32_t index = 0; index < kSequences; index++)
     {
-        profile.tracks.push_back(
-            NamedOrNumberedTrack(index, ultralib::n64::kChameleonTwist2SongNames, "Sequence", TitleBase::kHex));
+        profile.tracks.push_back(NumberedTrack(index, NumberTitle("Sequence", index, TitleBase::kHex)));
     }
 
     return profile;

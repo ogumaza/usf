@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-// Hey You, Pikachu! (USA): the game's music. The track titles are the names in the game's "Play music" menu, in the
-// table at 0x8012BCA0 of the overlay that the game loads from 0xB3C70 in the ROM. The menu lists the 45 cues in the
-// bank at 0xB140C0.
+// Hey You, Pikachu! (USA): the game's music. The tracks go by the cues' numbers. The game's "Play music" menu names the
+// cues, in the table at 0x8012BCA0 of the overlay that the game loads from 0xB3C70 in the ROM. The menu lists the 45
+// cues in the bank at 0xB140C0.
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
@@ -25,15 +25,12 @@
 // - A fishing script lowers the rate by 0.015 from 90 s into the session. The rate stops at 0.79. The script restarts
 //   its cue at that rate after each catch.
 //
-// Each cue that a run of those areas slows has a second track at the rate where the slide stops, titled "..., slower".
-// Its mini holds the same selector value and changes the sequence start at 0x8000522C to store the rate in place of
-// 1.0. The driver and the library stay as they are for the 45 cues. These tracks come after them, and the numbers of
-// the 45 don't change.
+// Each cue that a run of those areas slows has a second track at the rate where the slide stops. Its mini contains the
+// same selector value and changes the sequence start at 0x8000522C to store the rate in place of 1.0. The driver and
+// the library stay as they are for the 45 cues. These tracks come after them, and the numbers of the 45 don't change.
 
 #include <bit>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
 #include <vector>
 
 #include "rip/driver.h"
@@ -52,9 +49,10 @@ constexpr uint32_t kPlayCue = 0x80023244;
 constexpr uint32_t kLoopEnd = 0x80005664;
 
 constexpr uint32_t kSequenceCategory = 2;
+constexpr uint32_t kCues = 45;
 constexpr uint32_t kFullVolume = 0x7FFF;
 
-// The end of RDRAM. A run of the game holds zeros there.
+// The end of RDRAM. A run of the game leaves zeros there.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
 struct SlowCue
@@ -108,7 +106,6 @@ GameProfile NusNpgeUsa()
     profile.game = "Hey You, Pikachu!";
     profile.serial = "NUS-NPGE-USA";
     profile.sha1 = "da1a1e47a86720f9d54fb2d2d247480041bda824";
-    profile.year = "2000";
     profile.sound_driver = "Hey You, Pikachu! sequence engine on n_audio";
     profile.controller = true;
 
@@ -126,28 +123,15 @@ GameProfile NusNpgeUsa()
 
     profile.loop_watches.push_back({.address = kLoopEnd});
 
-    // The set makes a track for each name in ultralib's table: cues 0 to 44, in order. A new name there adds a track.
-    // Compare usfrip --list, then update the count.
-    static_assert(ultralib::n64::kHeyYouPikachuSongNames.size() == 45);
-    for (const SongName& cue : ultralib::n64::kHeyYouPikachuSongNames)
+    // A track for each of the 45 cues, in order.
+    for (uint32_t number = 0; number < kCues; number++)
     {
-        Track track;
-        track.number = static_cast<uint32_t>(cue.index);
-        track.name = cue.name;
-        profile.tracks.push_back(track);
+        profile.tracks.push_back(NumberedTrack(number, NumberTitle("Cue", number, TitleBase::kDecimal)));
     }
 
     for (const SlowCue& slow : kSlowCues)
     {
-        const char* name = FindSongName(ultralib::n64::kHeyYouPikachuSongNames, slow.cue);
-        if (name == nullptr)
-        {
-            throw std::logic_error("a slower cue of Hey You, Pikachu! has no name");
-        }
-
-        Track track;
-        track.number = slow.cue;
-        track.name = std::string(name) + ", slower";
+        Track track = NumberedTrack(slow.cue, NumberTitle("Cue", slow.cue, TitleBase::kDecimal));
         track.rdram_patches = StartRatePatches(slow.rate);
         profile.tracks.push_back(track);
     }

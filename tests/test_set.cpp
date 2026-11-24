@@ -4,13 +4,14 @@
 
 #include <array>
 
+#include "ultralib/machine/constants.h"
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "xsflib/bytes.h"
 
 #include "rip/mips.h"
 #include "test_mips.h"
-#include "ultralib/machine/save_state.h"
-#include "ultralib/machine/system.h"
-#include "ultralib/testing/test_programs.h"
 #include "usf/usf_file.h"
 
 namespace usf::testing
@@ -46,9 +47,6 @@ constexpr uint32_t kWorkArea = 0x00100100;
 constexpr uint32_t kBuffers = 0x00200000; // Two buffers, 0x1000 bytes apart.
 constexpr uint32_t kRomSize = 0x1000;
 
-// The NTSC video clock. A rate is the clock over DACRATE + 1.
-constexpr uint32_t kNtscVideoClock = 48681812;
-
 // The parameters' offsets in their block.
 constexpr uint16_t kDacRate = 0;
 constexpr uint16_t kCpuLoops = 4;
@@ -65,24 +63,7 @@ constexpr uint32_t kStatusAsleep = 0x20000400;
 constexpr uint32_t kStatusAwake = kStatusAsleep | 1;
 constexpr uint32_t kStatusInException = kStatusAsleep | 2;
 
-uint32_t Mfc0(mips::Register rt, uint32_t rd)
-{
-    return 0x40000000 | (uint32_t{rt} << 16) | (rd << 11);
-}
-
-uint32_t Mtc0(mips::Register rt, uint32_t rd)
-{
-    return 0x40800000 | (uint32_t{rt} << 16) | (rd << 11);
-}
-
-constexpr uint32_t kEret = 0x42000018;
-
 // The FPU's instructions, on single-precision registers.
-uint32_t Mtc1(mips::Register rt, uint32_t fs)
-{
-    return 0x44800000 | (uint32_t{rt} << 16) | (fs << 11);
-}
-
 uint32_t CvtSW(uint32_t fd, uint32_t fs)
 {
     return 0x46800020 | (fs << 11) | (fd << 6);
@@ -113,8 +94,8 @@ std::vector<uint32_t> MakeRspProgram()
         ultralib::testing::RspSqv(6, 3),                                  // sqv $v6[0], 48(r0)
         0x2021FFFF,                                                       // addi r1, r1, -1
         0x1C20FFF7,                                                       // bgtz r1, loop
-        0x00000000,                                                       // nop
-        0x0000000D,                                                       // break
+        mips::kNop,                                                       // nop
+        kBreak,                                                           // break
     };
 }
 
@@ -165,7 +146,7 @@ void EmitStop(mips::Assembler& code)
     code.SetBranchTarget(go_on, code.Here());
 }
 
-// The buffer: frame i holds the ramp on the left and one more on the right.
+// The buffer: frame i has the ramp on the left and one more on the right.
 void EmitFill(mips::Assembler& code)
 {
     code.Emit(mips::Lui(kT0, mips::High(kKseg0 | kBuffers)));
@@ -315,7 +296,7 @@ std::vector<uint8_t> MakeState()
 
 uint32_t TestRate(uint32_t dac_rate)
 {
-    return kNtscVideoClock / (dac_rate + 1);
+    return static_cast<uint32_t>(ultralib::machine::kVideoClockNtsc / (dac_rate + 1));
 }
 
 int16_t TestLeft(const TestTrack& track, uint64_t frame)

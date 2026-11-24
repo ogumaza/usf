@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// Paper Mario (USA): the game's music. The game has no sound test. Each title names the place or the event where the
-// game plays the song. A song holds up to four versions, which the game picks with a number when it starts the song.
+// Paper Mario (USA): the game's music. The game has no sound test. A song has up to four versions. The game picks one
+// with a number when it starts the song.
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
@@ -15,8 +15,8 @@
 //   running by then, and the game hasn't started any song.
 // - The game's map scripts change five songs while they play, and each change is a track here. Bowser's Castle sets its
 //   track levels in scripts at 0xA4C178 to 0xAA9768 in the ROM. The set for the castle's outside matches the song's
-//   start, so it has no track. The code at 0x892A2C and 0x89FECC does the same for two rooms of the tunnels, and the
-//   code at 0xB2C47C for Yoshi's Village. The code at 0x954004 swaps Dry Dry Desert's linked tracks at the oasis. Toad
+//   start. It has no track. The code at 0x892A2C and 0x89FECC does the same for two rooms of the tunnels, and the code
+//   at 0xB2C47C for Yoshi's Village. The code at 0x954004 swaps Dry Dry Desert's linked tracks at the oasis. Toad
 //   Town's triggers, at the addresses in kChanges, pick a mix by the player's position. Six of them have a place whose
 //   script sets the full level while the player is inside it: five buildings and the floor of Rowf's Badge Shop.
 // - Outside such a place, its trigger sets the near level of the same mix. The set therefore has a track for each of
@@ -86,12 +86,12 @@ constexpr uint32_t kLoopLaterPass = 0x8004EA68;
 // The player that kLoadSong loads the song on, in a1: the first of the engine's two music players.
 constexpr uint32_t kMusicPlayer = 0;
 
-// A track's number holds the song in its low byte and the version above it.
+// A track's number contains the song in its low byte and the version above it.
 constexpr int kVersionShift = 8;
 constexpr uint16_t kVersionMask = 0xFF;
 constexpr uint16_t kSongMask = 0xFF;
 
-// A track's number also holds a change above the version.
+// A track's number also contains a change above the version.
 constexpr int kChangeShift = 16;
 constexpr uint32_t kChangeTrackMask = 0xFFFF00FF;
 
@@ -120,7 +120,7 @@ constexpr uint32_t kBowsersCastle = 0x31373020;
 
 // The game waits a few frames after starting a song before it sets the track levels. A song's first commands would undo
 // them. The driver makes those calls in each of the first frames. Linked tracks appear only in a song's later phrases,
-// where the first pass of the loop starts. A swap needs them there, and repeating the call has no effect after that.
+// where the first pass of the loop starts. A swap requires them there, and repeating the call has no effect after that.
 constexpr uint32_t kChangeFrames = 6;
 constexpr int kFieldsPerFrame = 2;
 
@@ -132,40 +132,39 @@ struct Change
     uint32_t function;
     uint32_t argument;
     bool at_start;
-    const char* title;
 };
 
 // The order of the rows gives the order of the tracks. A row keeps its place once a release contains it.
 constexpr Change kChanges[] = {
-    {0x00, 1, kToadTown, kSetMixFull, 1, true, "Tayce T.'s House"},        // Trigger at 0x8313E0.
-    {0x00, 2, kToadTown, kSetMixFull, 2, true, "Merlon's House"},          // Trigger at 0x8090E0.
-    {0x00, 3, kToadTown, kSetMixFull, 3, true, "the Dojo"},                // Trigger at 0x7F9118.
-    {0x00, 4, kToadTown, kSetMixNear, 4, true, "the pipe to the Tunnels"}, // Trigger at 0x8313F8.
-    {0x00, 5, kToadTown, kSetMixNear, 5, true, "Minh T.'s Garden"},        // Trigger at 0x809110.
-    {0x00, 7, kToadTown, kSetMixFull, 7, true, "Russ T.'s House"},         // Trigger at 0x7F9100.
-    {0x00, 8, kToadTown, kSetMixFull, 8, true, "Rowf's Badge Shop"},       // Trigger at 0x8090F8.
-    {0x00, 9, kToadTown, kSetMixFull, 9, true, "the Warehouse"},           // Trigger at 0x8520A0.
+    {0x00, 1, kToadTown, kSetMixFull, 1, true}, // Tayce T.'s House. Trigger at 0x8313E0.
+    {0x00, 2, kToadTown, kSetMixFull, 2, true}, // Merlon's House. Trigger at 0x8090E0.
+    {0x00, 3, kToadTown, kSetMixFull, 3, true}, // The Dojo. Trigger at 0x7F9118.
+    {0x00, 4, kToadTown, kSetMixNear, 4, true}, // The pipe to the Tunnels. Trigger at 0x8313F8.
+    {0x00, 5, kToadTown, kSetMixNear, 5, true}, // Minh T.'s Garden. Trigger at 0x809110.
+    {0x00, 7, kToadTown, kSetMixFull, 7, true}, // Russ T.'s House. Trigger at 0x7F9100.
+    {0x00, 8, kToadTown, kSetMixFull, 8, true}, // Rowf's Badge Shop. Trigger at 0x8090F8.
+    {0x00, 9, kToadTown, kSetMixFull, 9, true}, // The Warehouse. Trigger at 0x8520A0.
     // The six places at the near level. The change is the mix plus 0x10.
-    {0x00, 0x11, kToadTown, kSetMixNear, 1, true, "outside Tayce T.'s House"},
-    {0x00, 0x12, kToadTown, kSetMixNear, 2, true, "outside Merlon's House"},
-    {0x00, 0x13, kToadTown, kSetMixNear, 3, true, "outside the Dojo"},
-    {0x00, 0x17, kToadTown, kSetMixNear, 7, true, "outside Russ T.'s House"},
-    {0x00, 0x19, kToadTown, kSetMixNear, 9, true, "outside the Warehouse"},
-    {0x00, 0x18, kToadTown, kSetMixNear, 8, true, "outside Rowf's Badge Shop"},
+    {0x00, 0x11, kToadTown, kSetMixNear, 1, true}, // Outside Tayce T.'s House.
+    {0x00, 0x12, kToadTown, kSetMixNear, 2, true}, // Outside Merlon's House.
+    {0x00, 0x13, kToadTown, kSetMixNear, 3, true}, // Outside the Dojo.
+    {0x00, 0x17, kToadTown, kSetMixNear, 7, true}, // Outside Russ T.'s House.
+    {0x00, 0x19, kToadTown, kSetMixNear, 9, true}, // Outside the Warehouse.
+    {0x00, 0x18, kToadTown, kSetMixNear, 8, true}, // Outside Rowf's Badge Shop.
     // Mix 6. The game never plays it.
-    {0x00, 6, kToadTown, kSetMixNear, 6, true, "mix 6 (unused)"},
-    {0x17, 1, kDryDryDesert, kSetLinkedMode, 1, false, "the Oasis"},
-    {0x26, 1, kYoshisVillage, kSetTrackVolumes, 0, false, "full levels"},
-    {0x4B, 1, kTunnels, kSetTrackVolumes, 2, false, "cold rooms"},
-    {0x64, 1, kBowsersCastle, kSetTrackVolumes, 5, false, "first areas"},
-    {0x64, 2, kBowsersCastle, kSetTrackVolumes, 6, false, "middle areas"},
-    {0x64, 3, kBowsersCastle, kSetTrackVolumes, 7, false, "final areas"},
+    {0x00, 6, kToadTown, kSetMixNear, 6, true},
+    {0x17, 1, kDryDryDesert, kSetLinkedMode, 1, false},    // The Oasis.
+    {0x26, 1, kYoshisVillage, kSetTrackVolumes, 0, false}, // Full levels.
+    {0x4B, 1, kTunnels, kSetTrackVolumes, 2, false},       // Cold rooms.
+    {0x64, 1, kBowsersCastle, kSetTrackVolumes, 5, false}, // First areas.
+    {0x64, 2, kBowsersCastle, kSetTrackVolumes, 6, false}, // Middle areas.
+    {0x64, 3, kBowsersCastle, kSetTrackVolumes, 7, false}, // Final areas.
 };
 
 // A bus's effect changes only through a song's commands, and nothing resets it between songs. A song that sets no
-// effect keeps the effect of the song before it. At the snapshot the bus holds no effect, and with none it mixes its
-// send straight into the output. Such a song would play too loud and without reverb. This word in the sound globals
-// requests an effect for the first bus, the same request as a song's command. The audio engine then applies it.
+// effect keeps the effect of the song before it. At the snapshot the bus has no effect, and with none it mixes its send
+// straight into the output. Such a song would play too loud and without reverb. This word in the sound globals requests
+// an effect for the first bus, the same request as a song's command. The audio engine then applies it.
 constexpr uint32_t kEffectRequest = 0x801D57E0;
 constexpr uint32_t kEffectRequested = 0x00010000;
 constexpr int kEffectShift = 24;
@@ -176,17 +175,27 @@ struct StartEffect
     uint32_t effect;
 };
 
-// The game gives these no single value, and each one is a choice.
+// These versions set no effect at their start. Where the game starts a version after more than one song, or never
+// starts it, the effect here is a choice.
 // - Normal Battle keeps the effect of the field song that played before the battle. The function at 0x8014AEF8 pushes
 //   the field song and starts the battle song. The battle song sets no effect. Of the game's areas with enemies, 6.5
 //   play the battle after effect 1, the small room. Another 6.5 play it after effect 5, the echo, and 5 after effect 2
 //   or 10, the big room. An area with two field songs counts half for each. The game's first battles come after effect
 //   1, on the roads around Goomba Village and Koopa Village. The versions therefore start with effect 1.
-//   kEffectGroups adds tracks for the other two effects.
-// - Raphael Raven plays in Deep Jungle, whose first version sets effect 2.
-// - Four versions set their effect in a later phrase, and they start with that effect: 0x70, 0x79, 0x83 and 0x91.
-// - The rest are later versions of a song, which no script starts with a constant. They start with the effect of the
-//   song's first version.
+//   kEffectGroups adds tracks for the other effects.
+// - Every change of song or version is a fresh start: the function at 0x8014A548 stops the playing song, then loads and
+//   starts the requested one. Only a request for the playing song and version leaves the song as it is (0x8014A7E0). A
+//   version that sets no effect at its start therefore keeps the effect of the song that played before it.
+// - The scripts start the first version of Raphael Raven at 0xB805F8 and 0xB80674 in the tree, at 0xB83860 when a save
+//   in the tree loads, and at 0xB85C3C outside the tree. The game first starts it after Deep Jungle. Deep Jungle's song
+//   sets effect 2. kEffectGroups adds tracks for the other states.
+// - Four versions set their effect in a later phrase: 0x70, 0x79, 0x83 and 0x91. Three of them start after one song
+//   only, and they start with that song's effect. The script at 0xAB426C starts version 2 of 0x70 after the script at
+//   0xAB3320 starts song 0x78. Song 0x78 sets effect 10. The script at 0xD02568 starts version 1 of 0x79 in Shiver
+//   City. Shiver City's song, 0x38, sets effect 10. The version sets effect 1 at 26 s. The script at 0x92D8EC starts
+//   version 2 of 0x83 after Dry Dry Desert. Dry Dry Desert's song, 0x17, sets effect 1. The version sets effect 5 at
+//   14 s.
+// - No code starts the other versions in this table. They start with the effect of the song's first version.
 constexpr StartEffect kStartEffects[] = {
     {Number(0x01, 2), 1},  {Number(0x02, 1), 1},  {Number(0x02, 2), 1},  {Number(0x02, 3), 1},  {Number(0x02, 4), 1},
     {Number(0x05, 3), 5},  {Number(0x0E, 2), 10}, {Number(0x14, 3), 5},  {Number(0x19, 2), 2},  {Number(0x1B, 3), 2},
@@ -194,43 +203,54 @@ constexpr StartEffect kStartEffects[] = {
     {Number(0x28, 3), 2},  {Number(0x2A, 2), 2},  {Number(0x2C, 2), 10}, {Number(0x37, 2), 5},  {Number(0x39, 2), 10},
     {Number(0x3F, 3), 1},  {Number(0x48, 2), 1},  {Number(0x49, 2), 1},  {Number(0x50, 2), 10}, {Number(0x56, 2), 10},
     {Number(0x57, 2), 5},  {Number(0x5A, 2), 5},  {Number(0x5B, 3), 1},  {Number(0x60, 2), 1},  {Number(0x66, 3), 5},
-    {Number(0x67, 2), 5},  {Number(0x6D, 3), 5},  {Number(0x6E, 2), 10}, {Number(0x70, 2), 10}, {Number(0x79, 1), 1},
-    {Number(0x7A, 2), 10}, {Number(0x7D, 2), 1},  {Number(0x7F, 2), 10}, {Number(0x80, 2), 1},  {Number(0x83, 2), 5},
+    {Number(0x67, 2), 5},  {Number(0x6D, 3), 5},  {Number(0x6E, 2), 10}, {Number(0x70, 2), 10}, {Number(0x79, 1), 10},
+    {Number(0x7A, 2), 10}, {Number(0x7D, 2), 1},  {Number(0x7F, 2), 10}, {Number(0x80, 2), 1},  {Number(0x83, 2), 1},
     {Number(0x91, 2), 5},  {Number(0x96, 3), 10},
 };
 
 // One more group of tracks for a song that the game plays after more than one effect, in many areas each. The group has
-// a track for each of the song's first `versions` versions. Each track starts with `effect`, and its title ends with
-// `title`.
+// a track for each of the song's first `versions` versions. Each track starts with `effect`.
 struct EffectGroup
 {
     uint32_t song;
     uint32_t versions;
     uint32_t effect;
-    const char* title;
 };
 
 // The encounter code at 0x8004166C to 0x800416BC starts versions 1 to 3 of Normal Battle, by who strikes first.
-constexpr EffectGroup kEffectGroups[] = {{0x02, 3, 5, "echo"}, {0x02, 3, 2, "big room"}};
+// Effect 5 is the echo, and effect 2 the big room. The groups after those two come from Raphael Raven's states:
+// - Raphael Raven follows Yoshi's Village (song 0x26, with effect 1) when the player comes from the village while
+//   Raphael waits for Mario. It follows the file select's song (0x69, with effect 3, the chorus) when a save in the
+//   tree loads.
+// - After a battle, the function at 0x8014AE6C restores the field song and requests the effects that the song has
+//   set. A song that has set none requests effect 0, no effect. Raphael Raven then plays on with no effect after a
+//   battle outside the tree, in the map whose script at 0xB85C3C starts the song. The next battle there starts Normal
+//   Battle with no effect.
+// - Raphael Raven keeps playing outside the tree while Raphael waits for Mario. A battle there after a save in the
+//   tree loads starts Normal Battle with effect 3.
+constexpr uint32_t kNoEffect = 0;
+constexpr EffectGroup kEffectGroups[] = {{0x02, 3, 5}, {0x02, 3, 2}, {0x02, 3, kNoEffect}, {0x02, 3, 3},
+                                         {0x28, 1, 1}, {0x28, 1, 3}, {0x28, 1, kNoEffect}};
 
-// The number of an effect group's track contains the effect above the change. The driver's calls ignore it. It keeps
-// the numbers of a song's tracks distinct.
+// The number of an effect group's track contains the effect above the change, or kNoEffectNumber for no effect. The
+// driver's calls ignore it. It keeps the numbers of a song's tracks distinct.
 constexpr int kGroupShift = 24;
+constexpr uint32_t kNoEffectNumber = 0x80;
 
 // The second version of this song lists the same phrases as the first.
 constexpr uint32_t kRepeatedVersion = Number(0x61, 2);
 
-// The end of RDRAM. A run of the game holds zeros from 0x8038A978 to the end.
+// The end of RDRAM. A run of the game leaves zeros from 0x8038A978 to the end.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
-// A song in the game's list, with the number of versions. ultralib's table gives the song names.
+// A song in the game's list, with the number of versions.
 struct Song
 {
     uint32_t number;
     uint32_t versions;
 };
 
-// The songs in the game's list. Many entries in the list repeat Goomba Village, and the set holds it once.
+// The songs in the game's list. Many entries in the list repeat Goomba Village, and the set has it once.
 constexpr Song kSongs[] = {
     {0x00, 2}, {0x01, 2}, {0x02, 4}, {0x03, 3}, {0x04, 2}, {0x05, 3}, {0x07, 2}, {0x08, 2}, {0x09, 2}, {0x0A, 2},
     {0x0B, 3}, {0x0C, 2}, {0x0D, 3}, {0x0E, 2}, {0x0F, 2}, {0x11, 1}, {0x12, 2}, {0x13, 2}, {0x14, 3}, {0x15, 2},
@@ -249,32 +269,10 @@ constexpr Song kSongs[] = {
     {0x94, 1}, {0x95, 4}, {0x96, 3},
 };
 
-// The name of `song` in ultralib's table.
-const char* SongNameOf(const Song& song)
-{
-    return FindSongName(ultralib::n64::kPaperMarioSongNames, song.number);
-}
-
 // The request word that starts a track with `effect`.
 RdramPatch EffectPatch(uint32_t effect)
 {
     return {.address = kEffectRequest, .words = {(effect << kEffectShift) | kEffectRequested}};
-}
-
-// The title of `version` of `song`, counting from 1, with `detail` after it if it isn't null.
-std::string VersionTitle(const Song& song, uint32_t version, const char* detail)
-{
-    std::string text;
-    if (version > 1)
-    {
-        text = "version " + std::to_string(version);
-    }
-    if (detail != nullptr)
-    {
-        text += text.empty() ? detail : std::string(", ") + detail;
-    }
-
-    return SongTitle("Song", song.number, TitleBase::kHex, SongNameOf(song), text.empty() ? nullptr : text.c_str());
 }
 
 // Adds a track for each version of `song`, with the effect that the version starts with.
@@ -289,7 +287,7 @@ void AddVersionTracks(const Song& song, std::vector<Track>& tracks)
             continue;
         }
 
-        track.name = VersionTitle(song, version, nullptr);
+        track.name = NumberTitle("Song", song.number, TitleBase::kHex);
 
         for (const StartEffect& effect : kStartEffects)
         {
@@ -320,8 +318,9 @@ void AddEffectTracks(const Song& song, std::vector<Track>& tracks)
         for (uint32_t version = 1; version <= group.versions; version++)
         {
             Track track;
-            track.number = (group.effect << kGroupShift) | Number(song.number, version);
-            track.name = VersionTitle(song, version, group.title);
+            const uint32_t group_number = group.effect == kNoEffect ? kNoEffectNumber : group.effect;
+            track.number = (group_number << kGroupShift) | Number(song.number, version);
+            track.name = NumberTitle("Song", song.number, TitleBase::kHex);
             track.rdram_patches.push_back(EffectPatch(group.effect));
             tracks.push_back(track);
         }
@@ -337,7 +336,7 @@ void AddChangeTracks(const Song& song, std::vector<Track>& tracks)
         {
             Track track;
             track.number = (change.change << kChangeShift) | song.number;
-            track.name = SongTitle("Song", song.number, TitleBase::kHex, SongNameOf(song), change.title);
+            track.name = NumberTitle("Song", song.number, TitleBase::kHex);
             tracks.push_back(track);
         }
     }
@@ -365,7 +364,6 @@ GameProfile NusNmqeUsa()
     profile.game = "Paper Mario";
     profile.serial = "NUS-NMQE-USA";
     profile.sha1 = "3837f44cda784b466c9a2d99df70d77c322b97a0";
-    profile.year = "2001";
     profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = "Paper Mario BGM player";
     profile.controller = true;

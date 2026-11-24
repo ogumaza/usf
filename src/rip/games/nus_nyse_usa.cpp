@@ -19,8 +19,8 @@
 //   0x0A, 0x11, 0x14, 0x23, 0x2D and 0x32, and 14 for the others. The code at 0x8002B3A0 sets the mood from the current
 //   Yoshi's health: 0 for 1 to 7, 1 for 8, 2 for 0 and 3 for more than 8. 0x80010730 sets mood 1 in place of mood 3
 //   before it starts a sequence. Mood 3 therefore comes only while a sequence plays.
-// - Mood 2 sets a tempo change of -60 and, for the channels of a table, a frequency of 0.67, both reached over 60
-//   frames. Mood 3 mutes channels 0 to 10 and 14 of the sequences listed above. Channels 11 to 13 then play.
+// - Mood 2 sets a tempo change of -60 and, for the channels of a table, a frequency of 0.67, both reached over
+//   60 frames. Mood 3 mutes channels 0 to 10 and 14 of the sequences listed above. Channels 11 to 13 then play.
 // - The music handle's fields go to the audio thread through requests that 0x80019184 sends each frame: the sequence's
 //   start (command 0x82), the muted channels (commands 0x90 and 0x08), the tempo change (0x49), and the channels'
 //   frequency (0x04).
@@ -50,13 +50,13 @@
 //   2, 3 or 4. It's 1 at the snapshot. Then 0x80010730 mutes no more channels. The other states only take channels
 //   away. The rip has no track for them.
 
-#include <cstdio>
 #include <iterator>
 #include <string>
 #include <vector>
 
 #include "rip/driver.h"
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 #include "rip/mips.h"
 
 namespace usf::rip::games
@@ -72,7 +72,7 @@ constexpr uint32_t kSetPhase = 0x80018B78;
 constexpr uint32_t kSequenceJump = 0x8000D518;
 constexpr uint32_t kMusicScript = 0x800B77B4;
 
-// RDRAM that runs of the game hold at zero, from 0x8022D200 to 0x8031E000.
+// RDRAM that runs of the game leave at zero, from 0x8022D200 to 0x8031E000.
 constexpr uint32_t kDriverAddress = 0x8031D000;
 
 // The driver's retrace client, 3 KB after the driver's start. The driver must end before it. Setting `end` to it
@@ -138,41 +138,12 @@ constexpr bool MoodSongsMatchMusic()
 
 static_assert(MoodSongsMatchMusic());
 
-constexpr int kTitleMusic = 0x16;
-
 bool Ripped(int music)
 {
     // 0x0C and 0x0D repeat sequences 0x02 and 0x08. 0x40 and 0x41 name entries that point to sequence 1. With them,
     // sequence 1 plays channels 11 to 13 as well. No code that starts them is known. 0x43 and 0x44 name sequences that
     // the table doesn't hold.
     return music != 0x0C && music != 0x0D && music != 0x40 && music != 0x41 && music < 0x43;
-}
-
-std::string TrackName(int music, int mood, int phase)
-{
-    char name[64];
-    std::snprintf(name, sizeof(name), "Music 0x%02X (sequence 0x%02X)", music, kSequenceOfMusic[music]);
-    std::string text = name;
-    if (music == kTitleMusic)
-    {
-        text += ": title screen";
-    }
-
-    if (phase != 0)
-    {
-        text += ", phase " + std::to_string(phase);
-    }
-
-    if (mood == kNoPetalsMood)
-    {
-        text += ", no petals";
-    }
-    else if (mood == kHighHealthMood)
-    {
-        text += ", health above 8";
-    }
-
-    return text;
 }
 
 // Adds the tracks of each music number: the music, the other phases of music 0x0F, and the moods of kMoodSongs.
@@ -185,14 +156,14 @@ void AddMusicTracks(std::vector<Track>& tracks)
             continue;
         }
 
-        tracks.push_back({.number = static_cast<uint32_t>(music), .name = TrackName(music, 0, 0)});
+        const std::string title = NumberTitle("Music", static_cast<uint32_t>(music), TitleBase::kHex);
+        tracks.push_back({.number = static_cast<uint32_t>(music), .name = title});
 
         if (music == kPhaseMusic)
         {
             for (const int phase : kOtherPhases)
             {
-                tracks.push_back({.number = static_cast<uint32_t>(music | (phase << kPhaseShift)),
-                                  .name = TrackName(music, 0, phase)});
+                tracks.push_back({.number = static_cast<uint32_t>(music | (phase << kPhaseShift)), .name = title});
             }
         }
 
@@ -205,8 +176,7 @@ void AddMusicTracks(std::vector<Track>& tracks)
 
             for (const int mood : {kNoPetalsMood, kHighHealthMood})
             {
-                tracks.push_back(
-                    {.number = static_cast<uint32_t>(music | (mood << kMoodShift)), .name = TrackName(music, mood, 0)});
+                tracks.push_back({.number = static_cast<uint32_t>(music | (mood << kMoodShift)), .name = title});
             }
         }
     }
@@ -220,7 +190,6 @@ GameProfile NusNyseUsa()
     profile.game = "Yoshi's Story";
     profile.serial = "NUS-NYSE-USA";
     profile.sha1 = "b13072fef6c6df48c07d8822c01e5bc59036f6da";
-    profile.year = "1997";
     profile.cic = ultralib::machine::Cic::k6106;
     profile.sound_driver = "Nintendo EAD sound engine";
     profile.eeprom = ultralib::machine::EepromType::k16Kbit;

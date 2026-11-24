@@ -14,7 +14,7 @@
 // The files are rendered one after another. A file that fails doesn't stop the rest. A .usflib among the inputs is
 // skipped. It's a library that the other files load. Files dropped on the program become inputs.
 //
-// The tool runs on xsflib's play-tool frame (xsflib/cli/play.h). This file holds its names, help and --info summary.
+// The tool runs on xsflib's play-tool frame (xsflib/cli/play.h). This file contains its names, help and --info summary.
 
 #include <string>
 
@@ -34,8 +34,8 @@ constexpr char kDescription[] =
     "are skipped because the .miniusf files load them.\n"
     "You can also drop files on the program.\n";
 
-// What --info prints about a set: its files, its ROM image, its flags and its rate. The frame doesn't let this start
-// the playback's player, so a second player runs the set up to its first frames.
+// What --info prints about a set: its files, its ROM image, its flags and its rate. This function can't start the
+// player of the playback. A second player therefore runs the set up to its first frames.
 std::string DescribeSet(Playback& playback)
 {
     const usf::LoadedUsf& set = playback.GetPlayer().GetLoadedSet();

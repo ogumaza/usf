@@ -3,14 +3,30 @@
 #include "rip/profiles.h"
 
 #include "rip/games/games.h"
+#include "rip/games/tracks.h"
 
 namespace usf::rip
 {
+namespace
+{
+
+// The profiles, with a version in the title of each track whose song has an earlier track in the set.
+std::vector<GameProfile> WithVersionTitles(std::vector<GameProfile> profiles)
+{
+    for (GameProfile& profile : profiles)
+    {
+        games::AddVersionTitles(profile.tracks);
+    }
+
+    return profiles;
+}
+
+} // namespace
 
 const std::vector<GameProfile>& Profiles()
 {
     // Add each game's profile function here.
-    static const std::vector<GameProfile> kProfiles = {
+    static const std::vector<GameProfile> kProfiles = WithVersionTitles({
         games::Aleck64ElevenBeat(),
         games::Aleck64HanabiDeDoon(),
         games::Aleck64HiPaiParadise(),
@@ -42,7 +58,7 @@ const std::vector<GameProfile>& Profiles()
         games::NusNx2eUsa(),
         games::NusNyseUsa(),
         games::NusNzseUsa(),
-    };
+    });
 
     return kProfiles;
 }

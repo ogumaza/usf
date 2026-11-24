@@ -12,7 +12,6 @@ namespace
 {
 
 // The major opcodes and the SPECIAL group's function codes.
-constexpr uint32_t kOpSpecial = 0x00;
 constexpr uint32_t kOpJ = 0x02;
 constexpr uint32_t kOpBeq = 0x04;
 constexpr uint32_t kOpBne = 0x05;
@@ -32,17 +31,6 @@ constexpr uint32_t kFunctAddu = 0x21;
 constexpr uint32_t kFunctAnd = 0x24;
 constexpr uint32_t kFunctOr = 0x25;
 constexpr uint32_t kFunctSltu = 0x2B;
-
-uint32_t IType(uint32_t op, Register rs, Register rt, uint16_t immediate)
-{
-    return op << 26 | uint32_t{rs} << 21 | uint32_t{rt} << 16 | immediate;
-}
-
-uint32_t RType(Register rs, Register rt, Register rd, uint32_t shift, uint32_t funct)
-{
-    return kOpSpecial << 26 | uint32_t{rs} << 21 | uint32_t{rt} << 16 | uint32_t{rd} << 11 | (shift & 0x1F) << 6 |
-           funct;
-}
 
 } // namespace
 

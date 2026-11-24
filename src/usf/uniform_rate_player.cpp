@@ -74,7 +74,7 @@ std::size_t UniformRatePlayer::RenderConverted(int16_t* out, std::size_t frames,
 
     for (std::size_t i = 0; i < frames; i++)
     {
-        // Each output frame moves on by rate / rate_ of a source frame. Bring in the source frames that it lies
+        // Each output frame moves on by rate / rate_ of a source frame. Bring in the source frames that it falls
         // between, unless the rate changes first.
         while (phase_ >= rate_)
         {

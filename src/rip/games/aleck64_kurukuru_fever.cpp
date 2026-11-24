@@ -6,7 +6,7 @@
 // Addresses come from the game's code in the image and from runs in usf's core. The game's code is copied from
 // cartridge offset 0x30770 to 0x8012AA70.
 //
-// - The function at 0x8013E8AC takes a song's number in a0. It asks for the song only while one of two flags of the
+// - The function at 0x8013E8AC takes a song's number in a0. It requests the song only while one of two flags of the
 //   game's state is set. The graphics thread calls the function at 0x8013E9F4 once a frame. That function finds the
 //   song's number in the table at 0x80160200, stops the song that plays and starts the song as an effect of the music
 //   library, at volume 0x7F and pan 0x80. Numbers 0x12 and 0x16 start the same song. The set leaves out 0x16.
@@ -19,8 +19,8 @@
 //   at the snapshot. With the graphics thread stopped, the main thread (0x80055540, priority 10) can wait for them.
 //   Only the idle thread (0x80055390, priority 0) has a lower priority. Its loop at 0x800263A4 is a branch to itself.
 // - Each song is one wave on one channel of the library. The library streams the wave from the cartridge, and the
-//   wave's loop repeats the song. The table of lengths holds where the second pass ends, measured from the cartridge
-//   reads of runs in usf's core. Songs 0x09, 0x0D to 0x0F, 0x12, 0x14, 0x15 and 0x17 to 0x19 hold no loop.
+//   wave's loop repeats the song. The table of lengths gives where the second pass ends, measured from the cartridge
+//   reads of runs in usf's core. Songs 0x09, 0x0D to 0x0F, 0x12, 0x14, 0x15 and 0x17 to 0x19 have no loop.
 
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
@@ -57,7 +57,6 @@ GameProfile Aleck64KurukuruFever()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "f59c121e4d4c2c57c2ea4728919775a8d5d5e02e");
     profile.serial = "Aleck64 Kurukuru Fever";
-    profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
 
     profile.snapshot_address = kMainThreadWait;
@@ -69,7 +68,7 @@ GameProfile Aleck64KurukuruFever()
     CallDriverOptions driver;
     driver.address = kAleck64DriverAddress;
     // The request passes 1 in a1 and 0 in a2. So does the game's request at 0x8014A1C8. These values set a word that
-    // only the function at 0x8013E870 reads. That function returns the song asked for.
+    // only the function at 0x8013E870 reads. That function returns the requested song.
     driver.start_calls = {{.function = kAskForSong, .arguments = {{.track = true}, {.value = 1}, {.value = 0}}}};
     driver.frame_calls = {{.function = kFrameSound}};
     // Between frames the driver waits for a retrace message on the graphics thread's queue. The idle thread runs

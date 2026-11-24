@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// A game profile: what the ripper needs to know about a game's code to rip its music. Each supported game has one.
+// A game profile: the facts about a game's code that the ripper uses to rip its music. Each supported game has one.
 //
 // The ripper boots the game and runs it to the profile's snapshot point. It then applies the profile's patches, stops
 // the threads the profile names, installs the profile's driver if it has one, and checks that the moment is quiet. It
@@ -19,11 +19,10 @@
 #include <string>
 #include <vector>
 
-#include "xsflib/rip/rom_set.h"
-
 #include "ultralib/machine/constants.h"
 #include "ultralib/machine/pif.h"
 #include "ultralib/machine/system.h"
+#include "xsflib/rip/rom_set.h"
 
 namespace usf::rip
 {
@@ -59,12 +58,14 @@ struct Track
     uint32_t number = 0; // The value that the selector receives.
     std::string name;    // The title tag. The mini's file name comes from it too.
 
-    // Override the length analysis. A track with a length and no fade gets no fade.
+    // Override the length analysis. A track with a length and no fade ends: its length tag is at its last sound within
+    // the length, and its fade is the 1 s of a track that ends. A track with a fade loops or keeps its sound.
     std::optional<double> length_seconds;
     std::optional<double> fade_seconds;
 
     // Words that this track's mini writes into RDRAM beside the selector, for a track that a number alone can't select.
-    // They replace what the snapshot holds there, the profile's patches included. The addresses are in KSEG0 or KSEG1.
+    // They replace what the snapshot contains there, the profile's patches included. The addresses are in KSEG0 or
+    // KSEG1.
     std::vector<RdramPatch> rdram_patches;
 };
 
@@ -87,24 +88,25 @@ struct Driver
 
 // A point in the game's sequence player that the length analysis watches: an instruction that runs each time a sequence
 // jumps back to its loop. The analysis counts the loops there and fades a track out after its second loop. Where each
-// of a sequence's tracks jumps back separately, a track register tells them apart. The analysis then counts the loops
+// of a sequence's tracks jumps back separately, a track register distinguishes them. The analysis then counts the loops
 // of the first track that loops after the first sound. It fades once every track that loops has looped twice.
 struct LoopWatch
 {
     uint32_t address = 0;
 
-    // Registers that tell loops apart at that instruction, or -1. The loop's target address tells one loop from
-    // another. The track or channel tells one part of the sequence from another.
+    // Registers that distinguish loops at that instruction, or -1. The loop's target address distinguishes one loop
+    // from another. The track or channel distinguishes one part of the sequence from another.
     int target_register = -1;
     int track_register = -1;
 
-    // A register that holds the loop's repeat count at that instruction, or -1. With it, a jump counts only when the
+    // A register that contains the loop's repeat count at that instruction, or -1. With it, a jump counts only when the
     // loop repeats for ever, with a count of 0xFF. A loop that repeats a set number of times doesn't show the end of a
     // song. It can be a short figure inside the song.
     int count_register = -1;
 
-    // A register that must hold `match_value` at that instruction, or -1. With it, a jump counts only for that value.
-    // An engine that runs the jumps of all its scripts through one function needs it to pick out the sequence's script.
+    // A register that must contain `match_value` at that instruction, or -1. With it, a jump counts only for that
+    // value. An engine that runs the jumps of all its scripts through one function requires it to pick out the
+    // sequence's script.
     int match_register = -1;
     uint32_t match_value = 0;
 };
@@ -119,25 +121,20 @@ using RomChip = xsflib::rip::RomChip;
 
 struct GameProfile
 {
-    // The game. `game` becomes the game tag and the set's name. `serial` names the image in messages, by its serial,
-    // region and revision, such as "NUS-NCTE-USA-rev1". `sha1` is the SHA-1 of the image in big-endian byte order, in
-    // lower-case hex. The ripper refuses an image with another hash.
+    // The game. `game` and `serial` name it in messages. The ripper writes neither into the set. `serial` gives the
+    // image's serial, region and revision, such as "NUS-NCTE-USA-rev1". `sha1` is the SHA-1 of the image in big-endian
+    // byte order, in lower-case hex. The ripper refuses an image with another hash.
     std::string game;
     std::string serial;
     std::string sha1;
 
     // An image may have more than one set, such as its music and its sound effects. Each set has a profile of its own,
     // with the image's SHA-1. `set` names the set, such as "music". When an image has more than one set, each set goes
-    // in a folder of that name. `sound_effects` marks a set of sound effects, which usfrip's --bgm leaves out.
+    // in a folder of that name. `sound_effects` marks a set of sound effects. usfrip's --bgm leaves such a set out.
     std::string set;
     bool sound_effects = false;
 
-    // Metadata for the tags. Empty fields are left out.
-    std::string artist;
-    std::string year;
-    std::string copyright;
-
-    // The boot chip, or kUnknown to let the boot find it. A CIC-NUS-6105 game needs a dump of the PIF ROM.
+    // The boot chip, or kUnknown to let the boot find it. A CIC-NUS-6105 game requires a dump of the PIF ROM.
     ultralib::machine::Cic cic = ultralib::machine::Cic::kUnknown;
 
     uint32_t rdram_size = ultralib::machine::kRdramSize4;
@@ -169,7 +166,7 @@ struct GameProfile
     // the snapshot can't be stopped this way. A driver can take it over instead.
     std::vector<uint32_t> stop_threads;
 
-    // A driver to install at the snapshot, if the game needs one.
+    // A driver to install at the snapshot, for a game that requires one.
     std::optional<Driver> driver;
 
     std::vector<Track> tracks;

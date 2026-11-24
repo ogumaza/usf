@@ -11,7 +11,7 @@
 //     const uint32_t rate = player.SampleRate();
 //     const size_t got = player.Render(frames, count);
 //
-// Player is a PlayerBase of xsflib, so it has Load, Start, GetState, Error, GetTags, LengthMs, FadeMs and Volume from
+// Player is a PlayerBase of xsflib. It has Load, Start, GetState, Error, GetTags, LengthMs, FadeMs and Volume from
 // there. The caller applies the length, the fade and the volume. xsflib's Playback does that for a player whose rate
 // stays the same from one Start to the next: a constant kSampleRate, or a kSampleRate of 0 with SampleRate(). A USF
 // track's rate can change mid-stream. Player therefore has no kSampleRate. UniformRatePlayer gives Playback one rate
@@ -30,10 +30,10 @@
 #include <string>
 #include <vector>
 
+#include "ultralib/machine/system.h"
 #include "xsflib/player/player.h"
 #include "xsflib/psf/psf.h"
 
-#include "ultralib/machine/system.h"
 #include "usf/track.h"
 #include "usf/usf_file.h"
 
@@ -49,7 +49,8 @@ public:
     static constexpr const char* kStartFailure = "the emulation failed to start: ";
     static constexpr const char* kStepFailure = "the emulation failed: ";
 
-    // Loads the track at `path` with its libraries, as LoadUsf does. Bad sets are rejected here. The error tells why.
+    // Loads the track at `path` with its libraries, as LoadUsf does. Bad sets are rejected here. The error gives the
+    // reason.
     static std::optional<std::string> LoadFile(const std::string& path, const xsflib::psf::FileReader& reader,
                                                LoadedUsf& set);
 
@@ -59,7 +60,7 @@ public:
     Player(const Player&) = delete;
     Player& operator=(const Player&) = delete;
 
-    // Renders up to `frames` stereo frames (interleaved left and right) into `out`, which has room for `frames` frames.
+    // Renders up to `frames` stereo frames (interleaved left and right) into `out`. `out` has room for `frames` frames.
     // Returns the frames written. All of them have the rate that SampleRate gave before the call. The count is less
     // than `frames` when the rate changes at that point, and 0 after an error or before Start. A track never ends by
     // itself, and a game that stops sending audio gives silence.

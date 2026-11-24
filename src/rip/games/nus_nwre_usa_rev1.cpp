@@ -6,13 +6,13 @@
 // Addresses come from the game's code in the image and from runs in usf's core, with a controller and a 4 Kbit EEPROM
 // connected. The main segment is copied from cartridge offset 0x1000 to 0x80046800.
 //
-// - The sequence table at cartridge offset 0x7AE8B0 holds 33 sequences. The audio set-up at 0x800BA37C reads its header
-//   and keeps the count at 0x80045514.
+// - The sequence table at cartridge offset 0x7AE8B0 contains 33 sequences. The audio set-up at 0x800BA37C reads its
+//   header and keeps the count at 0x80045514.
 // - 0x800C5354 posts a command to the audio thread. 0x800C53B0 and 0x800C538C post one with a word or a float. The send
 //   function at 0x800C5404 takes no arguments and sends the posted commands to the audio thread.
 // - The music function at 0x800C1504 takes a sequence's number in a0 and a fade-in in a1. It posts command 0x82 with
-//   sequence player 1 and the number, which starts the sequence on that player, and sets the player's volume to 0.55
-//   (command 0x41).
+//   sequence player 1 and the number. That command starts the sequence on that player. The function then sets the
+//   player's volume to 0.55 (command 0x41).
 // - The function at 0x800C13AC starts sequence 0 on sequence player 0, for the sound effects. Sequence 1 (96 bytes)
 //   makes no sound on sequence player 1. The other 31 sequences are the tracks.
 // - The game first calls 0x800C13AC after the audio reset and before any sound. Right after it, the game calls the
@@ -37,7 +37,7 @@ constexpr uint32_t kPlayMusic = 0x800C1504;
 constexpr uint32_t kSendCommands = 0x800C5404;
 constexpr uint32_t kSequenceJump = 0x800BEC30;
 
-// The top of RDRAM. Runs of the game hold zeros from 0x803AC400 to 0x80400000.
+// The top of RDRAM. Runs of the game leave zeros from 0x803AC400 to 0x80400000.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
 constexpr uint32_t kSequences = 33;
@@ -46,9 +46,9 @@ constexpr uint32_t kSequences = 33;
 constexpr uint32_t kFirstMusic = 2;
 
 // Sequence 0x02 never repeats exactly, and the length analysis gave it the limit of 600 s. Its script jumps back every
-// 99.72 s, four of its channels repeat figures of 0.05 s and 0.4 s, and the rest of its music drifts. In a run of 600
-// s, the music matches itself best 76.3 to 78.5 s later, and less closely each time. The measured length covers two of
-// those cycles from the first sound at 0.72 s.
+// 99.72 s, four of its channels repeat figures of 0.05 s and 0.4 s, and the rest of its music drifts. In a run of
+// 600 s, the music matches itself best 76.3 to 78.5 s later, and less closely each time. The measured length covers two
+// of those cycles from the first sound at 0.72 s.
 constexpr SongLength kSequenceLengths[] = {{.number = 0x02, .seconds = 157.0}};
 
 } // namespace
@@ -59,7 +59,6 @@ GameProfile NusNwreUsaRev1()
     profile.game = "Wave Race 64";
     profile.serial = "NUS-NWRE-USA-rev1";
     profile.sha1 = "508dfc2d4caa42b6f6de5263d0aed5e44ac7966a";
-    profile.year = "1996";
     profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
     profile.controller = true;
@@ -80,7 +79,7 @@ GameProfile NusNwreUsaRev1()
     };
     profile.driver = BuildCallDriver(driver);
 
-    // The sequence players run separate scripts. The player's address in s1 tells their jumps apart.
+    // The sequence players run separate scripts. The player's address in s1 distinguishes their jumps.
     profile.loop_watches.push_back(
         {.address = kSequenceJump, .target_register = mips::kT3, .track_register = mips::kS1});
 

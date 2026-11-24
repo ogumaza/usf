@@ -2,7 +2,7 @@
 
 usf rips and plays Nintendo 64 music in USF, the PSF-family format for the Nintendo 64. A USF rip contains the parts
 of a game that its music uses: the code and data that the game reads, and a save state from a moment just before a
-track starts. A player runs that code on an emulated console, so the music plays as it does in the game.
+track starts. A player runs that code on an emulated console, and the music plays as it does in the game.
 
 usf has an emulator core that boots a game from its cartridge image and runs it, and these programs:
 
@@ -86,31 +86,37 @@ set to a separate folder inside that folder: `music` and `sound effects`. `--bgm
 Super Real Mahjong VS plays its music in mono or in stereo. A setting in the game's service menu picks which, and the
 game plays mono until someone changes it. `usfrip` rips both, as the sets `mono` and `stereo`.
 
-A profile (`src/rip/profile.h`) says where in the game code to save the state, which register or word of RDRAM selects
-a track, which threads to stop, what to patch, and the list of tracks. Some games have no song-select call to stop at,
-such as a set of sound effects. For those, `usfrip` writes a small driver into RDRAM (`src/rip/driver.h`). The driver
-calls the game's functions with the number of each track.
+A profile (`src/rip/profile.h`) sets the point in the game code where the state is saved, the register or word of
+RDRAM that selects a track, the threads to stop, the patches and the list of tracks. A set of sound effects, and the
+music of some games, have no song-select call to stop at. For those, `usfrip` writes a small driver into RDRAM
+(`src/rip/driver.h`). The driver calls the game's functions with the number of each track.
 
 `usfrip` boots the game and runs it to the snapshot point of the profile. It checks that nothing is in flight there
 that a save state can't record. Each track then runs from that state, with the timing of the legacy players:
 
-- The length comes from xsflib's length analysis of the output: two passes of the loop and a fade of 10 s, or the
-  end of the sound.
+- The length comes from xsflib's length analysis of the output: two passes of the loop and a fade of 7 s, or the
+  last sound and a fade of 1 s. It counts from the first sound: the first sample that isn't 0. A loop also gets its
+  start and the length of one pass, as the tags `loop_start` and `loop_length`.
 - Coverage records every ROM word that the run reads. The run lasts for the length and fade of the track, half the
   length more for a track that loops, and a margin of 10 s.
 - The set keeps only those ROM words. The library contains every ROM word that a track reads, and the save state: the
   registers, RDRAM and the RSP memory. Each mini contains only the track number and the few words of the state that
-  its track changes, so a mini is a few hundred bytes. The library leaves out the words of RDRAM that are zero. The
-  USF format has a player fill the save state with zeros before it loads a set, so those words still read as zero.
-  RDRAM isn't trimmed by coverage. The legacy players time the hardware differently from the core, and a game running
-  in them can read RDRAM that the core never read.
+  its track changes. A mini is therefore a few hundred bytes. The library leaves out the words of RDRAM that are zero.
+  A USF player fills the save state with zeros before it loads a set, and those words still read as zero. RDRAM isn't
+  trimmed by coverage. The legacy players time the hardware differently from the core, and a game running in them can
+  read RDRAM that the core never read.
 
 At the end, `usfrip` loads each mini with its library, as a player would. It checks that the mini renders the same
 samples as the untrimmed state over its length and fade.
 
-The files have the tags `_enablecompare=1` and `_enableFIFOfull=1`, the usual metadata and `usfby`. Two more tags are
-for information only, and players ignore them: `usfrip` with the version of the ripper, and `usfdriver` with the name
-of the sound driver of the game.
+Every file of the set has the tags `_enablecompare=1` and `_enableFIFOfull=1`. Each mini also has `game`, `title`,
+`track`, `usfby`, `utf8=1` and the length tags. The `game` tag is the name of the image or of the Aleck64 set, unless
+`--game` gives another, and the library is named after it. Each track's title gives the song's number in the game, such
+as `Sequence 0x2E`, or the track's place in the set for a game that doesn't number its songs. When a set has several
+tracks of one song, each in a state that the game's code sets, the later ones add `, version 2`, `, version 3` and so
+on. `usfrip` writes no song names. It writes the artist, year and copyright only when the options below give them. Add
+the rest in a tag editor. Two more tags are for information only, and players ignore them: `usfrip` with the version of
+the ripper, and `usfdriver` with the name of the sound driver of the game.
 
 Options:
 
@@ -118,13 +124,15 @@ Options:
 - `--list`: list the tracks of each set
 - `--only REGEX`: rip only the tracks whose names match
 - `--bgm`: rip only the music, without the sets of sound effects
-- `--no-length`: skip the length analysis
+- `--no-length`: skip the length analysis, and leave out the length and fade tags of every track whose length the
+  profile doesn't set
 - `--no-trim`: keep the whole ROM and the whole state in the library
 - `--no-check`: skip the check at the end
 - `--margin S`: the seconds of play after the fade that the coverage still covers (default 10)
 - `--pif FILE`: a dump of the PIF ROM
 - `--jobs N`: the number of tracks that run at once (default: the number of CPU threads)
-- `--game`, `--artist`, `--year`, `--copyright`, `--by`: the tags of those names
+- `--game`, `--artist`, `--year`, `--copyright`: the tags of those names (`--game` defaults to the name of the image)
+- `--by NAME`: the `usfby` tag (default `usfrip`)
 
 Games with the CIC-NUS-6105 boot chip read code that the boot ROM of the PIF leaves in the RSP memory. usf doesn't
 include that code. Give a dump of the PIF ROM with `--pif FILE`.
@@ -139,7 +147,8 @@ uses the timing of the legacy players and follows the `_enablecompare` and `_ena
 is 16-bit stereo at the rate that the game sets on its audio interface. The rate differs from game to game, and the
 player doesn't resample it.
 
-`usfplay` renders each track to a WAV file next to it, for the length and fade in the tags of the track:
+`usfplay` renders each track to a WAV file next to it, as a soundtrack album plays it: from the first sound, after
+0.5 s of silence, for the length and fade in the tags of the track, with 1 s of silence after it:
 
 ```
 usfplay "0001 Title.miniusf"
@@ -147,8 +156,16 @@ usfplay "0001 Title.miniusf"
 
 `-o FILE` writes FILE instead. With a `.flac` extension, the file is FLAC. `--length T` and `--fade T` replace the
 values of the tags, in seconds, `m:s` or `h:m:s`. `--default T` sets the length for a file with no `length` tag (2:30
-if you don't set it, with a fade of 10 s). `--info` prints the tags and the files that each track loads, without
-rendering. `usfplay` prints how fast each render ran.
+if you don't set it, with a fade of 7 s). `--fade-exponent P` sets the curve of the fade, from 0.5 to 4: 1 fades
+linearly, and the default, 2, fades with the square of the time left in the fade, as most soundtrack albums do.
+`--info` prints the tags and the files that each track loads, without rendering. `usfplay` prints how fast each render
+ran.
+
+`--keep-opening` keeps the silence before the first sound. `--start-silence T` and `--end-silence T` set the silences
+before and after the track. `--loops N` plays N passes of a loop that has the loop tags, `--loop-fade T` sets the fade
+of a loop, and `--one-pass-over T` plays one pass of a loop whose two passes take longer than T. `--ignore-tags` plays
+every file for the default length and fade, and `--keep-ending` keeps the silence at the end of a piece that ends.
+`--raw` plays the file as it is, with no skip and no added silence.
 
 For foobar2000 and XMPlay, see `plugins/foobar2000/README.md` and `plugins/xmplay/README.md`. The foobar2000 component
 is named `foo_input_usfplay` because a third-party component already uses the name `foo_input_usf`.
@@ -229,8 +246,8 @@ Time runs at the hardware rates by default. An option switches to the Count mode
 `ultralib::machine::System` (`ultralib/machine/system.h`) is the API. A ripper loads a ROM with `LoadRom`, boots it with
 `Boot`, runs it with `Run` or `RunSeconds`, stops it at breakpoints, reads and writes memory and registers, patches the
 ROM, turns coverage on with `SetCoverage`, and saves a snapshot with `SaveState` once `CheckQuiet` reports a quiet
-moment. `GetPif` connects controllers and an EEPROM, and accepts a script of controller input by video field or by time.
-`SetPifRom` sets the dump of the PIF ROM.
+moment. Through the PIF that `GetPif` returns, a ripper connects controllers and an EEPROM, and gives a script of
+controller input by video field or by time. `SetPifRom` sets the dump of the PIF ROM.
 
 `n64run` boots a cartridge image, runs it, and writes what its audio interface plays to a WAV file:
 
@@ -238,14 +255,15 @@ moment. `GetPif` connects controllers and an EEPROM, and accepts a script of con
 build/n64run --seconds 10 --wav out.wav game.z64
 ```
 
-`--legacy` uses the timing of the legacy players. `--pif FILE` reads the dump of the PIF ROM. `--8mb` sets the RDRAM
-to 8 MiB. `--debug-port` prints what a program writes to the debug port at 0x13FF0000. `--controller`
-connects a controller to the first port, and `--eeprom 4k` or `--eeprom 16k` an EEPROM to the cartridge.
-`--port P` (1 to 4) picks the port that the next `--controller` or `--input` uses. The default is port 1.
-`--input F:B[:X:Y]` holds the buttons B, in hex as the controller sends them, from video field F on, with the stick at
-X and Y. `--board aleck64` or `--board aleck64-e90` runs an image on the Aleck64 board, with 8 MiB of RDRAM.
-`--board-input F:S:Y[:R]` sets the board's inputs from video field F on: the words S at 0xC0800000 and Y at
-0xC0800004, and the four rows R of a mahjong panel. `n64run` also plays a USF track with its libraries:
+`--seconds S` sets the emulated time of the run (10 s by default). `--legacy` uses the timing of the legacy players.
+`--pif FILE` reads the dump of the PIF ROM. `--8mb` sets the RDRAM to 8 MiB. `--debug-port` prints what a program
+writes to the debug port at 0x13FF0000. `--controller` connects a controller, and `--eeprom 4k` or `--eeprom 16k` an
+EEPROM to the cartridge. `--port P` (1 to 4) picks the port that the next `--controller` or `--input` uses. The default
+is port 1. `--input F:B[:X:Y]` holds the buttons B, in hex as the controller sends them, from video field F on, with
+the stick at X and Y. It connects a controller too. `--board aleck64` or `--board aleck64-e90` runs an image on the
+Aleck64 board, with 8 MiB of RDRAM. `--board-input F:S:Y[:R]` sets the board's inputs from video field F on: the words
+S at 0xC0800000 and Y at 0xC0800004, and the four rows R of a mahjong panel. `n64run` also plays a USF track with its
+libraries:
 
 ```
 build/n64run --seconds 60 --wav out.wav "0001 Title.miniusf"
@@ -270,8 +288,9 @@ README describes that folder.
 - By default no controller is connected, as in the legacy players. Some games play no sound without one. A ripper
   may connect one before its snapshot. A controller has no Controller Pak or Rumble Pak.
 - A write to the EEPROM takes effect at once. The EEPROM never reports itself busy.
-- The length analysis follows only the output of the game. A track whose profile gives no loop point ends after 180 s
-  of silence, or at the limit of 600 s.
+- The length analysis follows only the output of the game. Without a loop point from the profile, it finds no loop. A
+  track then ends at its last sound once 180 s of silence follow, or else at the limit: 3,600 s for music, and 600 s
+  for a set of sound effects. A track at the limit gets a length of 10 minutes and a fade of 7 s.
 - A track plays as the legacy players play it, but not always sample for sample. Where a game sizes its audio buffers
   from AI_LEN, the core can make a different choice from them after a few seconds.
 - A file keeps one sample rate. If a game changes its rate during a track, the player converts the later frames to
@@ -295,10 +314,14 @@ docs/release-notes/  the notes of each release
 tests/               the CTest suites
 ```
 
+## Credits
+
+USF was developed by HCS.
+
 ## Licence
 
 usf is under the MIT licence (`LICENSE`). The vector unit of the RSP in the emulator core (in ultralib) is adapted from
-[Iconoclast's RSP](https://github.com/mupen64plus/mupen64plus-rsp-cxd4) (mupen64plus-rsp-cxd4), which Iconoclast
-dedicated to the public domain under CC0 1.0. `THIRD-PARTY-NOTICES.md` lists the libraries and code that usf uses, and
+[Iconoclast's RSP](https://github.com/mupen64plus/mupen64plus-rsp-cxd4) (mupen64plus-rsp-cxd4). Iconoclast dedicated
+that code to the public domain under CC0 1.0. `THIRD-PARTY-NOTICES.md` lists the libraries and code that usf uses, and
 what a binary distribution must include. This licence doesn't cover game data. Rips contain the code and sound data of a
 game and are for personal use.

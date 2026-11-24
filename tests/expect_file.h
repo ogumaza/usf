@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 // The expect.txt files of the tests that play USF sets, the WAV files that those tests compare, and the core's playback
-// of a track. Each folder that holds a file named expect.txt is a set. Each line of expect.txt names a track without
+// of a track. Each folder that contains a file named expect.txt is a set. Each line of expect.txt names a track without
 // its extension, a check and a number of seconds, separated by tabs:
 //
 //   TRACK  identical  SECONDS
@@ -38,7 +38,7 @@ namespace usf::testing
 struct ExpectLine
 {
     std::filesystem::path set; // The set's folder.
-    std::string text;          // The line as the file holds it.
+    std::string text;          // The line as the file has it.
     std::vector<std::string> fields;
 };
 

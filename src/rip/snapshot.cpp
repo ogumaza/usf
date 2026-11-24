@@ -7,13 +7,12 @@
 #include <stdexcept>
 #include <string>
 
-#include "xsflib/bytes.h"
-#include "xsflib/sha1.h"
-#include "xsflib/text.h"
-
 #include "ultralib/machine/bits.h"
 #include "ultralib/machine/constants.h"
 #include "ultralib/machine/save_state.h"
+#include "xsflib/bytes.h"
+#include "xsflib/sha1.h"
+#include "xsflib/text.h"
 
 namespace usf::rip
 {
@@ -65,7 +64,7 @@ void WriteWord(ultralib::machine::System& system, uint32_t vaddr, uint32_t value
     WriteWords(system, vaddr, {value});
 }
 
-// Connects the controllers and the EEPROM that the profile asks for, with its input script.
+// Connects the controllers and the EEPROM that the profile names, with its input script.
 void ConnectInput(ultralib::machine::System& system, const GameProfile& profile)
 {
     ultralib::machine::Pif& pif = system.GetPif();
@@ -249,7 +248,7 @@ Snapshot TakeSnapshot(const GameProfile& profile, std::vector<uint8_t> rom, std:
     RunToSnapshot(system, profile, snapshot);
     snapshot.seconds = static_cast<double>(system.Now()) / static_cast<double>(system.TicksPerSecond());
 
-    // The profile's changes, then the driver, which takes over the thread that reached the snapshot point.
+    // The profile's changes, then the driver. The driver takes over the thread that reached the snapshot point.
     for (const RdramPatch& patch : profile.rdram_patches)
     {
         WriteWords(system, patch.address, patch.words);

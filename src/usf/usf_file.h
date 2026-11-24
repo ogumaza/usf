@@ -13,17 +13,16 @@
 #include <string_view>
 #include <vector>
 
-#include "xsflib/psf/psf.h"
-
 #include "ultralib/machine/constants.h"
 #include "ultralib/machine/save_state.h"
+#include "xsflib/psf/psf.h"
 
 namespace usf
 {
 
 inline constexpr uint8_t kUsfVersion = 0x21;
 
-// The state image is this much larger than the RDRAM that it holds: the header comes before the RDRAM, and DMEM and
+// The state image is this much larger than the RDRAM that it contains: the header comes before the RDRAM, and DMEM and
 // IMEM come after it.
 inline constexpr uint32_t kStateOverhead = ultralib::machine::kStateOverhead;
 
@@ -39,7 +38,7 @@ struct Chunk
     std::vector<uint8_t> data;
 };
 
-// The reserved area of one file. A section that is absent holds nothing. An empty section is present without chunks.
+// The reserved area of one file. A section that is absent contains nothing. An empty section is present without chunks.
 struct Sections
 {
     std::optional<std::vector<Chunk>> rom;

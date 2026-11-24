@@ -5,7 +5,7 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The sequence file at cartridge offset 0x600660 holds 12 sequences. The game reads it to 0x8008BEE0 at boot.
+// - The sequence file at cartridge offset 0x600660 contains 12 sequences. The game reads it to 0x8008BEE0 at boot.
 // - The function at 0x8002877C takes a sequence's number in a0. It stops the song that plays, reads the sequence from
 //   the cartridge and starts it.
 // - The attract mode makes no sound. The idle thread loops at 0x80009FC8. The snapshot takes over the idle thread
@@ -42,7 +42,6 @@ GameProfile Aleck64Mayjinsen3()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "da401fc96a2b69db81970d879a2255e54db88e34");
     profile.serial = "Aleck64 Mayjinsen 3";
-    profile.year = "2000";
     profile.sound_driver = kCompressedSequencePlayer;
 
     profile.snapshot_address = kIdleLoop;

@@ -8,36 +8,41 @@
 // The checks: coverage finds those words; a set trimmed by it puts the state without the zero words of RDRAM and every
 // ROM word that a track read in the library, and each track's selector in its mini; each mini, written and loaded back,
 // renders the same samples as the untrimmed state (the anchor: a render of the untrimmed state through the same core
-// but not through the files); a mini that lacks its ROM data renders differently; a track that needs no run doesn't
-// run; a loop watch gives the length analysis its loops, from one jump back a pass or from one for each track of a
-// pass; and StopThread unlinks libultra threads.
+// but not through the files); a mini without its ROM data renders differently; a track that requires no run doesn't
+// run; a track whose length the profile sets runs for its first sounds; a loop watch gives the length analysis its
+// loops, from one jump back a pass or from one for each track of a pass; StopThread unlinks libultra threads; and the
+// length rules have xsflib's fade. profiles_test.cpp checks the game profiles.
 
 #include "rip/rip.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "xsflib/bytes.h"
-#include "xsflib/cli/rip.h"
-#include "xsflib/files.h"
-#include "xsflib/rip/file_names.h"
-#include "xsflib/testing/check.h"
-#include "xsflib/testing/temp_folder.h"
-
-#include "rip/mips.h"
-#include "rip/profiles.h"
-#include "rip/snapshot.h"
-#include "rip/trim.h"
-#include "test_mips.h"
 #include "ultralib/machine/save_state.h"
 #include "ultralib/machine/system.h"
 #include "ultralib/testing/test_programs.h"
+#include "xsflib/bytes.h"
+#include "xsflib/cli/rip.h"
+#include "xsflib/files.h"
+#include "xsflib/psf/psf.h"
+#include "xsflib/rip/file_names.h"
+#include "xsflib/rip/length.h"
+#include "xsflib/rip/length_tags.h"
+#include "xsflib/testing/check.h"
+#include "xsflib/testing/temp_folder.h"
+
+#include "rip/games/tracks.h"
+#include "rip/length.h"
+#include "rip/mips.h"
+#include "rip/snapshot.h"
+#include "rip/trim.h"
+#include "test_mips.h"
 #include "usf/usf_file.h"
 
 namespace
@@ -230,14 +235,7 @@ usf::rip::Snapshot MakeSnapshot(const Program& program)
     }
     system.WritePhysical32(kShared, 5);
 
-    usf::rip::Snapshot snapshot;
-    snapshot.rom = system.Rom();
-    snapshot.state = system.SaveState();
-    snapshot.selector_kind = usf::rip::TrackSelector::Kind::kRegister;
-    snapshot.selector_offset = kStateA0;
-    snapshot.selector_size = 8;
-
-    return snapshot;
+    return usf::testing::A0Snapshot(system);
 }
 
 usf::rip::GameProfile MakeProfile()
@@ -299,12 +297,13 @@ void Coverage(const TrackRuns& tracks)
         XSFLIB_CHECK(!read.rdram.Has(kSequence / 4) && !read.rdram.Has(kBuffer / 4));
     }
 
-    // The tracks differ, so the selector reaches the program.
-    XSFLIB_CHECK(tracks.runs[0].reference.size() == 2 && tracks.runs[0].reference != tracks.runs[1].reference);
+    // The tracks differ. The selector therefore reaches the program. The reference covers the length of 2 s and the
+    // fade of 1 s of a track that ends: 96,018 frames at 32,006 Hz, in three blocks.
+    XSFLIB_CHECK(tracks.runs[0].reference.size() == 3 && tracks.runs[0].reference != tracks.runs[1].reference);
 }
 
-// The set: the library holds the state without the zero words of RDRAM, and every ROM word that a track read: the three
-// tracks' bytes, which make one chunk, and the shared word. Each mini holds only its number in a0, the selector at
+// The set: the library contains the state without the zero words of RDRAM, and every ROM word that a track read: the
+// three tracks' bytes in one chunk, and the shared word. Each mini contains only its number in a0, the selector at
 // state offset 0x070.
 void SetLayout(const TrackRuns& tracks)
 {
@@ -315,6 +314,7 @@ void SetLayout(const TrackRuns& tracks)
     XSFLIB_CHECK(set.library.rom->front().offset == kTrackData);
     XSFLIB_CHECK(set.library.rom->front().data.size() == 0x100 * kTracks);
     XSFLIB_CHECK(set.library.rom->back().offset == kSharedRom && set.library.rom->back().data.size() == 4);
+
     // The state: the header, the runs of RDRAM words that aren't zero, and the RSP memory. Each run starts and ends
     // with such a word. Written over an image of zeros, as a player loads them, the chunks give the state back.
     const std::vector<uint8_t>& state = tracks.snapshot.state;
@@ -370,6 +370,7 @@ void WrittenFiles(const TrackRuns& tracks)
     const usf::rip::GameProfile& profile = tracks.profile;
     const usf::rip::SetSections set = usf::rip::BuildSet(tracks.snapshot, profile.tracks, &tracks.words);
     XSFLIB_REQUIRE(set.minis.size() == kTracks);
+
     // A library without the third track's ROM bytes plays that track wrong.
     usf::Sections broken_library = set.library;
     XSFLIB_REQUIRE(broken_library.rom && broken_library.rom->front().data.size() == 0x100 * kTracks);
@@ -380,8 +381,8 @@ void WrittenFiles(const TrackRuns& tracks)
 
     const std::vector<uint8_t> library = usf::rip::LibraryFile(profile, set.library, tags);
     XSFLIB_CHECK(!xsflib::WriteFile(folder.Path() / "Test.usflib", library));
-    XSFLIB_CHECK(!xsflib::WriteFile(folder.Path() / "Broken.usflib",
-                                    usf::rip::LibraryFile(profile, broken_library, tags)));
+    XSFLIB_CHECK(
+        !xsflib::WriteFile(folder.Path() / "Broken.usflib", usf::rip::LibraryFile(profile, broken_library, tags)));
 
     // The minis, written as usfrip writes them.
     std::vector<MiniJob> jobs;
@@ -406,12 +407,12 @@ void WrittenFiles(const TrackRuns& tracks)
     xsflib::cli::MiniSettings settings;
     settings.paths = &paths;
     settings.stream = stdout;
-    XSFLIB_REQUIRE(xsflib::cli::WriteMinis(folder.Path(), names, jobs, tags.common, settings, build) == kTracks);
+    XSFLIB_REQUIRE(xsflib::cli::WriteMinis(folder.Path(), names, jobs, tags.common, usf::rip::kLengthFrom, settings,
+                                           build) == kTracks);
 
     const std::filesystem::path broken_path = folder.Path() / "broken.miniusf";
-    XSFLIB_CHECK(!xsflib::WriteFile(broken_path,
-                                    usf::rip::MiniFile(profile, set.minis[2], 3, "Broken.usflib", tags.ripper,
-                                                       broken_tags)));
+    XSFLIB_CHECK(!xsflib::WriteFile(
+        broken_path, usf::rip::MiniFile(profile, set.minis[2], 3, "Broken.usflib", tags.ripper, broken_tags)));
     usf::LoadedUsf loaded;
     const auto load_error = usf::LoadUsf(xsflib::Utf8(paths[1]), xsflib::psf::ReadWholeFile, loaded);
 
@@ -421,10 +422,19 @@ void WrittenFiles(const TrackRuns& tracks)
         XSFLIB_CHECK(!usf::rip::CheckTrack(xsflib::Utf8(paths[i]), tracks.runs[i]));
     }
     XSFLIB_CHECK(usf::rip::CheckTrack(xsflib::Utf8(broken_path), tracks.runs[2]).has_value());
+
     // The mini's tags, and a library that keeps a small part of the ROM.
     XSFLIB_CHECK(!load_error);
     XSFLIB_CHECK(loaded.enable_compare && loaded.enable_fifo_full);
-    XSFLIB_CHECK(loaded.tags["title"] == "Track 1" && loaded.tags["length"] == "0:02.000");
+
+    // The profile's length of 2 s ends a track that sounds to its end. The tag counts from the first sample, and the
+    // track gets the fade of a track that ends.
+    const xsflib::rip::Timing& timing = *tracks.runs[1].timing;
+    XSFLIB_REQUIRE(timing.first_sample_ms.has_value());
+    XSFLIB_CHECK(timing.length_ms == 2000 && *timing.first_sample_ms < 100);
+    XSFLIB_CHECK(loaded.tags["title"] == "Track 1" &&
+                 loaded.tags["length"] == xsflib::psf::FormatTime(2000 - *timing.first_sample_ms) &&
+                 loaded.tags["fade"] == "1" && loaded.tags.count("loop_start") == 0);
     XSFLIB_CHECK(loaded.tags["usfrip"] == "usfrip test" && loaded.tags["_lib"] == "Test.usflib");
     XSFLIB_CHECK(loaded.rom.size() == kSharedRom + 4);
 }
@@ -450,8 +460,27 @@ void NoRun()
     XSFLIB_CHECK(!run.timing && run.reference.empty() && run.check_frames == 0);
 }
 
+// A track whose length the profile sets runs for its first sounds, even with no coverage and no reference to make. The
+// tags count from its first sample.
+void SetLengthRuns()
+{
+    const usf::rip::Snapshot snapshot = MakeSnapshot(MakeProgram());
+    const usf::rip::GameProfile profile = MakeProfile();
+    usf::rip::RunSettings settings;
+    settings.lengths = false;
+    settings.coverage = false;
+    settings.reference = false;
+
+    const usf::rip::TrackRun run = usf::rip::RunTrack(profile, snapshot, profile.tracks[0], settings);
+
+    XSFLIB_REQUIRE(run.timing.has_value());
+    XSFLIB_CHECK(run.timing->first_sample_ms.has_value() && run.timing->first_sound_ms.has_value());
+    XSFLIB_CHECK(run.timing->length_ms == 2000 && run.timing->fade_ms == 0 && !run.timing->silent);
+    XSFLIB_CHECK(run.reference.empty() && run.check_frames == 0);
+}
+
 // Runs track 0 of `program` without coverage, with `watch` as the profile's one loop watch, and checks the length of
-// two or three buffers and the default fade that the analysis gives.
+// two or three buffers, the first sample and the default fade that the analysis gives.
 void CheckLoops(const Program& program, const usf::rip::LoopWatch& watch)
 {
     const usf::rip::Snapshot snapshot = MakeSnapshot(program);
@@ -466,12 +495,15 @@ void CheckLoops(const Program& program, const usf::rip::LoopWatch& watch)
 
     XSFLIB_REQUIRE(run.timing.has_value());
     XSFLIB_CHECK(run.timing->length_ms >= 15 && run.timing->length_ms <= 24);
-    XSFLIB_CHECK(run.timing->fade_ms == 10000 && !run.timing->silent);
+    XSFLIB_CHECK(run.timing->fade_ms == 7000 && !run.timing->silent);
+    XSFLIB_REQUIRE(run.timing->first_sample_ms.has_value() && run.timing->first_sound_ms.has_value());
+    XSFLIB_CHECK(*run.timing->first_sample_ms <= *run.timing->first_sound_ms + 1);
+    XSFLIB_CHECK(*run.timing->first_sample_ms < run.timing->length_ms);
 }
 
 // A loop watch at the jump back to the start of the program's loop: each buffer is a pass of the loop. The analysis
 // counts two passes after the first sound and fades from there: a length of two or three buffers of 256 frames at
-// 32,006 Hz, 8 ms each, and the default fade of 10 s.
+// 32,006 Hz, 8 ms each, and the default fade of 7 s.
 void LoopWatch()
 {
     const Program program = MakeProgram();
@@ -572,12 +604,12 @@ void RdramSelector()
 
     const std::vector<uint8_t> state = usf::rip::TrackState(snapshot, 0xABCD);
 
-    // Console bytes 0x1002 and 0x1003 hold 0xAB and 0xCD, at state positions 0x75C + (A XOR 3).
+    // Console bytes 0x1002 and 0x1003 contain 0xAB and 0xCD, at state positions 0x75C + (A XOR 3).
     XSFLIB_CHECK(state[kStateRdramOffset + (0x1002 ^ 3)] == 0xAB && state[kStateRdramOffset + (0x1003 ^ 3)] == 0xCD);
     XSFLIB_CHECK(xsflib::LoadLe32(state.data() + kStateRdramOffset + 0x1000) == 0x0000ABCD);
 }
 
-// A track's patches: the mini holds them beside the selector, and they replace what the snapshot holds.
+// A track's patches: the mini contains them beside the selector, and they replace what the snapshot contains.
 void TrackPatches()
 {
     usf::rip::Snapshot snapshot = RdramSelectorSnapshot(0x1000, 4);
@@ -606,8 +638,8 @@ void TrackPatches()
     XSFLIB_CHECK(chunks[2].offset == kStateRdramOffset + 0x3000);
 }
 
-// A patch's address must be in KSEG0 or KSEG1. The patch must end within the 4 MiB of RDRAM. After the RDRAM, the
-// state holds DMEM.
+// A patch's address must be in KSEG0 or KSEG1. The patch must end within the 4 MiB of RDRAM. After the RDRAM, the state
+// contains DMEM.
 void RefusedPatches()
 {
     const usf::rip::Snapshot snapshot = RdramSelectorSnapshot(0x1000, 4);
@@ -625,122 +657,21 @@ void RefusedPatches()
     XSFLIB_CHECK(past_rdram.find("runs past RDRAM") != std::string::npos);
 }
 
-// An image with more than one set names each set, and no two of its sets alike.
-void ImageSets()
+// The rules of the length analysis: frames of 1 ms and a limit of 600 s, or 3,600 s with the long limit, and xsflib's
+// fade of 7 s. A track at either limit gets 600 s and the fade. A profile's track with a measured length gets the same
+// fade.
+void LengthRules()
 {
-    std::set<std::string> images;
-    for (const usf::rip::GameProfile& profile : usf::rip::Profiles())
-    {
-        images.insert(profile.sha1);
-    }
+    const xsflib::rip::LengthRules rules = usf::rip::GameLengthRules();
+    const xsflib::rip::LengthRules long_rules = usf::rip::GameLengthRules(xsflib::rip::Limit::kLong);
+    const std::vector<usf::rip::games::SongLength> lengths = {{1, 30.0}};
+    const usf::rip::Track measured = usf::rip::games::NumberedTrack(1, "Song", lengths);
 
-    for (const std::string& sha1 : images)
-    {
-        const std::vector<const usf::rip::GameProfile*> found = usf::rip::FindProfiles(sha1);
-        XSFLIB_CHECK(!found.empty());
-        if (found.size() > 1)
-        {
-            std::set<std::string> names;
-            for (const usf::rip::GameProfile* profile : found)
-            {
-                XSFLIB_CHECK(!profile->set.empty() && names.insert(profile->set).second);
-            }
-        }
-    }
-
-    // Super Mario 64 (USA): the music first, then the sound effects, which --bgm leaves out.
-    const std::vector<const usf::rip::GameProfile*> sm64 =
-        usf::rip::FindProfiles("9bef1128717f958171a4afac3ed78ee2bb4e86ce");
-    XSFLIB_CHECK(sm64.size() == 2 && !sm64[0]->sound_effects && sm64[1]->sound_effects);
-    XSFLIB_CHECK(usf::rip::FindProfiles("0000000000000000000000000000000000000000").empty());
-}
-
-// Whether Paper Mario's driver, for the track numbered `number` alone, calls `function` with Toad Town's song name and
-// `mix`. The driver loads the track's number into t0 and branches past the call for every other track. It then loads
-// the arguments into a0 and a1 and the function into t9, and calls it.
-bool CallsMix(const std::vector<uint32_t>& code, uint32_t number, uint32_t function, uint32_t mix)
-{
-    constexpr uint32_t kToadTownName = 0x32313020;
-    mips::Assembler head(0);
-    head.LoadImmediate(kT0, number);
-    mips::Assembler tail(0);
-    tail.LoadImmediate(kA0, kToadTownName);
-    tail.LoadImmediate(mips::kA1, mix);
-    tail.LoadImmediate(mips::kT9, function);
-    tail.Emit(mips::Jalr(mips::kRa, mips::kT9));
-
-    // The branch and its delay slot sit between the two parts.
-    const size_t skip = head.Words().size();
-    const size_t size = skip + 2 + tail.Words().size();
-    int found = 0;
-    for (size_t i = 0; i + size <= code.size(); i++)
-    {
-        if (std::equal(head.Words().begin(), head.Words().end(), code.begin() + static_cast<std::ptrdiff_t>(i)) &&
-            std::equal(tail.Words().begin(), tail.Words().end(),
-                       code.begin() + static_cast<std::ptrdiff_t>(i + skip + 2)))
-        {
-            found++;
-        }
-    }
-
-    return found == 1;
-}
-
-// Paper Mario (USA): Toad Town's tracks in their order, with their numbers, titles and mix calls. The five buildings
-// and the floor of Rowf's Badge Shop each have a track at the full level and one at the near level. Mixes 4 and 5 and
-// the unused mix 6 have one at the near level. Song 0x01 follows.
-void ToadTownTracks()
-{
-    constexpr uint32_t kNear = 0x80056044;
-    constexpr uint32_t kFull = 0x80056068;
-    struct Expected
-    {
-        uint32_t number;
-        const char* title;
-        uint32_t function; // 0 for a track without a mix.
-        uint32_t mix;
-    };
-    constexpr Expected kToadTown[] = {
-        {0x0, "Song 0x00: Toad Town", 0, 0},
-        {0x100, "Song 0x00: Toad Town, version 2", 0, 0},
-        {0x10000, "Song 0x00: Toad Town, Tayce T.'s House", kFull, 1},
-        {0x20000, "Song 0x00: Toad Town, Merlon's House", kFull, 2},
-        {0x30000, "Song 0x00: Toad Town, the Dojo", kFull, 3},
-        {0x40000, "Song 0x00: Toad Town, the pipe to the Tunnels", kNear, 4},
-        {0x50000, "Song 0x00: Toad Town, Minh T.'s Garden", kNear, 5},
-        {0x70000, "Song 0x00: Toad Town, Russ T.'s House", kFull, 7},
-        {0x80000, "Song 0x00: Toad Town, Rowf's Badge Shop", kFull, 8},
-        {0x90000, "Song 0x00: Toad Town, the Warehouse", kFull, 9},
-        {0x110000, "Song 0x00: Toad Town, outside Tayce T.'s House", kNear, 1},
-        {0x120000, "Song 0x00: Toad Town, outside Merlon's House", kNear, 2},
-        {0x130000, "Song 0x00: Toad Town, outside the Dojo", kNear, 3},
-        {0x170000, "Song 0x00: Toad Town, outside Russ T.'s House", kNear, 7},
-        {0x190000, "Song 0x00: Toad Town, outside the Warehouse", kNear, 9},
-        {0x180000, "Song 0x00: Toad Town, outside Rowf's Badge Shop", kNear, 8},
-        {0x60000, "Song 0x00: Toad Town, mix 6 (unused)", kNear, 6},
-        {0x1, "Song 0x01: Goomba Village", 0, 0},
-    };
-
-    const std::vector<const usf::rip::GameProfile*> found =
-        usf::rip::FindProfiles("3837f44cda784b466c9a2d99df70d77c322b97a0");
-    XSFLIB_REQUIRE(found.size() == 1 && found[0]->driver && found[0]->tracks.size() > std::size(kToadTown));
-    for (size_t i = 0; i < std::size(kToadTown); i++)
-    {
-        const Expected& expected = kToadTown[i];
-        const usf::rip::Track& track = found[0]->tracks[i];
-        XSFLIB_CHECK(track.number == expected.number && track.name == expected.title);
-        if (expected.function != 0)
-        {
-            XSFLIB_CHECK(CallsMix(found[0]->driver->code, expected.number, expected.function, expected.mix));
-        }
-    }
-
-    // Each track of the set has a number of its own.
-    std::set<uint32_t> numbers;
-    for (const usf::rip::Track& track : found[0]->tracks)
-    {
-        XSFLIB_CHECK(numbers.insert(track.number).second);
-    }
+    XSFLIB_CHECK(rules.max_frames == 600'000 && rules.max_ms == 600'000.0 && rules.frame_ms == 1.0);
+    XSFLIB_CHECK(rules.fade_ms == 7'000.0 && rules.held_fade_ms == 7'000.0);
+    XSFLIB_CHECK(long_rules.max_frames == 3'600'000 && long_rules.max_ms == 600'000.0 && long_rules.fade_ms == 7'000.0);
+    XSFLIB_REQUIRE(measured.length_seconds && measured.fade_seconds);
+    XSFLIB_CHECK(*measured.length_seconds == 30.0 && *measured.fade_seconds * 1000.0 == rules.fade_ms);
 }
 
 } // namespace
@@ -755,6 +686,7 @@ int main()
                                         SetLayout(tracks);
                                         WrittenFiles(tracks);
                                         NoRun();
+                                        SetLengthRuns();
                                         LoopWatch();
                                         TrackLoops();
                                         TrackAddresses();
@@ -763,7 +695,6 @@ int main()
                                         RdramSelector();
                                         TrackPatches();
                                         RefusedPatches();
-                                        ImageSets();
-                                        ToadTownTracks();
+                                        LengthRules();
                                     });
 }

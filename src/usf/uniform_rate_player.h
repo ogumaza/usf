@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 
 // The player of the front ends: usf::Player with one rate for each track. xsflib's Playback counts a track's length in
-// frames, a WAV file holds one rate, and XMPlay takes one rate for each track. Start therefore settles the track's
-// rate. It's the rate of the track's first frames. A game may change its rate later. The frames at any other rate are
-// then converted to the track's rate by linear interpolation. Every front end plays a file alike, and the track's times
-// stay right in seconds.
+// frames, a WAV file has one rate, and XMPlay takes one rate for each track. Start therefore settles the track's rate.
+// It's the rate of the track's first frames. A game may change its rate later. The frames at any other rate are then
+// converted to the track's rate by linear interpolation. Every front end plays a file alike, and the track's times stay
+// right in seconds.
 //
 // xsflib's Playback uses this class as its player. Playback seeks by restarting and rendering.
 
@@ -13,6 +13,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+
+#include "xsflib/player/playback.h"
 
 #include "usf/player.h"
 
@@ -24,6 +26,9 @@ class UniformRatePlayer : public Player
 public:
     // The rate depends on the set (xsflib/player/playback.h).
     static constexpr int kSampleRate = 0;
+
+    // A rip's length tags count from the first sound: the first sample that isn't 0.
+    static constexpr xsflib::player::LengthOrigin kLengthOrigin = xsflib::player::LengthOrigin::kFirstSound;
 
     // SampleRate's estimate before the first Start, when the set hasn't given its rate yet.
     static constexpr int kEstimatedRate = 32000;
@@ -48,7 +53,7 @@ private:
     // The latest frame that left the player unconverted, where a conversion starts from.
     Frame last_{};
 
-    // The conversion: the next output frame lies phase_ / rate_ of the way from from_ to to_.
+    // The conversion: the next output frame is phase_ / rate_ of the way from from_ to to_.
     bool converting_ = false;
     Frame from_{};
     Frame to_{};

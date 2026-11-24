@@ -21,7 +21,7 @@
 //   the music library's thread.
 // - Each channel of a song loops separately, and some channels start their loop later than others. At 0x8006F7EC the
 //   library has reached the end of a loop, with its count in v1, the channel in a0 and the loop's depth in a2. A count
-//   of 0xFF repeats for ever. Songs 6, 7 and 13 hold no loop.
+//   of 0xFF repeats for ever. Songs 6, 7 and 13 have no loop.
 
 #include "rip/driver.h"
 #include "rip/games/aleck64.h"
@@ -43,7 +43,7 @@ constexpr uint32_t kGraphicsThread = 0x800C3440;
 
 constexpr uint32_t kSongs = 13;
 
-// Runs of the songs measured where each channel's second pass ends. The table holds the latest of those ends.
+// Runs of the songs measured where each channel's second pass ends. The table contains the latest of those ends.
 constexpr SongLength kSongLengths[] = {
     {1, 139.8}, {2, 85.8},  {3, 73.1},   {4, 281.3},  {5, 89.2},
     {8, 65.4},  {9, 113.8}, {10, 188.1}, {11, 225.7}, {12, 90.9},
@@ -56,7 +56,6 @@ GameProfile Aleck64HiPaiParadise()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "68329c94e1b9342ee60713e9e0945ea2663210c7");
     profile.serial = "Aleck64 Hi Pai Paradise";
-    profile.year = "2003";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.switches = kFactorySwitches;
 

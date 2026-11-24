@@ -7,10 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "ultralib/machine/constants.h"
 #include "xsflib/text.h"
 
 #include "rip/mips.h"
-#include "ultralib/machine/constants.h"
 
 namespace usf::rip
 {
@@ -116,7 +116,7 @@ void EmitArgument(Assembler& code, const CallArgument& argument, mips::Register 
     }
 }
 
-// Emits a call. A frame call (`in_frame`) may be limited to a range of frames, which s1 counts.
+// Emits a call. A frame call (`in_frame`) may be limited to a range of frames. s1 counts the frames.
 void EmitCall(Assembler& code, const GameCall& call, bool in_frame)
 {
     if (call.arguments.size() > 4)

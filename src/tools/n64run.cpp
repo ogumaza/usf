@@ -12,10 +12,10 @@
 //   --seconds S     run for S seconds of emulated time (default 10, at most 86400)
 //   --wav FILE      write the audio to FILE
 //   --legacy        use the legacy players' timing instead of the hardware's
-//   --pif FILE      a dump of the PIF ROM, which games with the CIC-NUS-6105 need
+//   --pif FILE      a dump of the PIF ROM. Games with the CIC-NUS-6105 require it.
 //   --8mb           give the system 8 MiB of RDRAM
 //   --debug-port    turn on the debug port and print what the program writes to it
-//   --controller    connect a standard controller to the first port, with nothing pressed
+//   --controller    connect a standard controller to the port that --port picks, with nothing pressed
 //   --eeprom 4k|16k connect an EEPROM of 4 or 16 Kbit to the cartridge
 //   --input F:B[:X:Y] from video field F on, hold the buttons B (in hex, as the controller sends them) and put the
 //                   stick at X and Y. Implies --controller. Give it once for each change.
@@ -38,18 +38,15 @@
 #include <utility>
 #include <vector>
 
+#include "ultralib/machine/system.h"
 #include "xsflib/files.h"
 #include "xsflib/wav.h"
 
-#include "ultralib/machine/system.h"
 #include "usf/track.h"
 #include "usf/usf_file.h"
 
 namespace
 {
-
-// A WAV file's sizes are 32-bit. The RIFF size counts 36 bytes of headers besides the audio.
-constexpr uint64_t kMaxWavDataBytes = 0xFFFFFFFFu - 36;
 
 const char* CicName(ultralib::machine::Cic cic)
 {
@@ -356,7 +353,7 @@ bool SetUpSystem(ultralib::machine::System& system, std::vector<uint8_t> rom, co
     return true;
 }
 
-// What the audio interface played. The samples are kept only for a WAV file, up to the most that one can hold.
+// What the audio interface played. The samples are kept only for a WAV file, up to the most that one can contain.
 struct Audio
 {
     bool keep = false;
@@ -368,7 +365,7 @@ struct Audio
 };
 
 // Records the buffers that `system` plays in `audio`. The run stops where its samples would pass what a WAV file can
-// hold.
+// contain.
 void RecordAudio(ultralib::machine::System& system, Audio& audio)
 {
     const auto on_buffer = [&system, &audio](const ultralib::machine::AudioBuffer& buffer)
@@ -384,7 +381,7 @@ void RecordAudio(ultralib::machine::System& system, Audio& audio)
             audio.rate = buffer.sample_rate;
         }
 
-        if (audio.keep && 2 * (uint64_t{audio.samples.size()} + buffer.samples.size()) > kMaxWavDataBytes)
+        if (audio.keep && 2 * (uint64_t{audio.samples.size()} + buffer.samples.size()) > xsflib::kMaxWavDataBytes)
         {
             audio.too_long = true;
             system.Stop();

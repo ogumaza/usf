@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 // usfplay's output against the core's, on the sets in FOLDER and their expect.txt files (expect_file.h). For every
-// line, of any kind, the test runs usfplay on the track for SECONDS, with no fade, and reads its WAV file. The file
-// must hold what usf::Player plays, sample for sample, at its rate: the anchor of that check is the core's playback
-// API, played directly and not through the front end.
+// line, of any kind, the test runs usfplay on the track for SECONDS, with no fade and as the file is (--raw), and reads
+// its WAV file. The file must contain what usf::Player plays, sample for sample, at its rate: the anchor of that check
+// is the core's playback API, played directly and not through the front end.
 //
 //   usf_play_sets FOLDER USFPLAY WORK
 //
@@ -34,7 +34,7 @@ struct Wav
     uint32_t rate = 0;
 };
 
-// Runs usfplay on `track`, for `seconds` with no fade, into `out`.
+// Runs usfplay on `track`, for `seconds` with no fade and no added silence, into `out`.
 bool RunUsfplay(const fs::path& usfplay, const fs::path& track, const fs::path& out, const std::string& seconds)
 {
     const auto quote = [](const fs::path& path)
@@ -44,7 +44,8 @@ bool RunUsfplay(const fs::path& usfplay, const fs::path& track, const fs::path& 
 
     // cmd.exe drops the first and last quotes of a command that starts with a quote. Only Windows therefore gets an
     // outer pair.
-    std::string command = quote(usfplay) + " --length " + seconds + " --fade 0 -o " + quote(out) + " " + quote(track);
+    std::string command =
+        quote(usfplay) + " --raw --length " + seconds + " --fade 0 -o " + quote(out) + " " + quote(track);
 #ifdef _WIN32
     command = "\"" + command + "\"";
 #endif

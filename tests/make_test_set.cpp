@@ -111,7 +111,7 @@ int main(int argc, char** argv)
         write("02 Light.miniusf", usf::testing::MakeTestMini(LightTrack(), TrackTags("Light")));
 
     // The check of the renderer's output against the core's (play_sets.cpp).
-    const std::string expect = "01 Heavy\tcore\t3\n02 Light\tcore\t3\n";
+    const std::string kExpect = "01 Heavy\tcore\t3\n02 Light\tcore\t3\n";
 
-    return written && write("expect.txt", std::vector<uint8_t>(expect.begin(), expect.end())) ? 0 : 1;
+    return written && write("expect.txt", std::vector<uint8_t>(kExpect.begin(), kExpect.end())) ? 0 : 1;
 }

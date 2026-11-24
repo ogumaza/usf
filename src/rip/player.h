@@ -10,10 +10,10 @@
 #include <span>
 #include <vector>
 
+#include "ultralib/machine/system.h"
 #include "xsflib/sha256.h"
 
 #include "rip/profile.h"
-#include "ultralib/machine/system.h"
 #include "usf/track.h"
 
 namespace usf::rip

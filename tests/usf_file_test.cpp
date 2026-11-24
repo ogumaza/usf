@@ -12,13 +12,13 @@
 #include <string>
 #include <vector>
 
+#include "ultralib/machine/save_state.h"
+#include "ultralib/machine/system.h"
+#include "ultralib/testing/test_programs.h"
 #include "xsflib/bytes.h"
 #include "xsflib/testing/check.h"
 #include "xsflib/testing/sets.h"
 
-#include "ultralib/machine/save_state.h"
-#include "ultralib/machine/system.h"
-#include "ultralib/testing/test_programs.h"
 #include "usf/track.h"
 
 namespace
@@ -85,8 +85,8 @@ void Layout()
     std::vector<uint8_t> expected =
         Bytes({'P', 'S', 'F', 0x21, static_cast<int>(reserved.size()), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
     expected.insert(expected.end(), reserved.begin(), reserved.end());
-    const std::string tag_text = "[TAG]_lib=set.usflib\ntitle=A\n";
-    expected.insert(expected.end(), tag_text.begin(), tag_text.end());
+    const std::string kTagText = "[TAG]_lib=set.usflib\ntitle=A\n";
+    expected.insert(expected.end(), kTagText.begin(), kTagText.end());
 
     const std::vector<uint8_t> file = usf::WriteUsf(sections, tags);
 
@@ -134,7 +134,7 @@ void RoundTrip()
     system.Rdram()[0x2000] = 0x99;
     const std::vector<uint8_t> state = system.SaveState();
 
-    // The library holds the ROM in LE word order and the whole state. The mini changes a0 and one ROM byte.
+    // The library contains the ROM in LE word order and the whole state. The mini changes a0 and one ROM byte.
     Sections library;
     std::vector<uint8_t> le(rom.size());
     ultralib::machine::CopyToLeWords(rom.data(), le.data(), rom.size());
@@ -287,13 +287,13 @@ void FinalSizeWord()
     XSFLIB_CHECK(larger.state[kDmem8] == 0x88);
 }
 
-// A reserved area with a state section that holds MinimalState(), and no ROM section.
+// A reserved area with a state section that contains MinimalState(), and no ROM section.
 std::vector<uint8_t> StateArea()
 {
     return usf::WriteReservedArea({std::nullopt, std::vector<Chunk>{{0, MinimalState()}}});
 }
 
-// A good file passes, so that each rejection below comes from its one fault.
+// A good file passes. Each rejection below then comes from its one fault.
 void GoodFilePasses()
 {
     XSFLIB_CHECK(!Rejects(StateFile({})));
@@ -314,7 +314,7 @@ void RejectsOtherFormats()
 void RejectsShortAreas()
 {
     std::vector<uint8_t> area = StateArea();
-    area.resize(area.size() - 4); // Drops the state section's terminator: the area ends after a chunk, which is fine.
+    area.resize(area.size() - 4); // Drops the state section's terminator. An area may end after a chunk.
     XSFLIB_CHECK(!Rejects(RawFile(area)));
     XSFLIB_CHECK(Rejects(RawFile(Bytes({0, 0}))));
     std::vector<uint8_t> inside_length = area;
@@ -351,7 +351,7 @@ void RejectsBadStates()
     XSFLIB_CHECK(Rejects(StateFile({{4, Bytes({0, 0, 0x20, 0})}})));
 }
 
-// A library that's missing, and one that names itself. Each file holds a state. The library alone is then at fault.
+// A library that's missing, and one that names itself. Each file contains a state. The library alone is then at fault.
 void RejectsBadLibraries()
 {
     Sections with_state;

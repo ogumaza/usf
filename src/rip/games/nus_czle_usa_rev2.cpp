@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: MIT
 
-// The Legend of Zelda: Ocarina of Time (USA, revision 2): the game's music. The game has no sound test. Each title
-// names the place or the event where the game plays the sequence. A scene's header in the image gives the sequence of
-// each place.
+// The Legend of Zelda: Ocarina of Time (USA, revision 2): the game's music. The game has no sound test. A scene's
+// header in the image gives the sequence of each place.
 //
-// Addresses come from the game's code in the image and from runs in usf's core. The game requires the CIC-NUS-6105's
-// answers, which come from a dump of the console's PIF ROM: usfrip --pif FILE.
+// Addresses come from the game's code in the image and from runs in usf's core. The game requires the answers of the
+// CIC-NUS-6105. They come from a dump of the console's PIF ROM: usfrip --pif FILE.
 //
-// - The sequence table at 0x80114220 holds 110 sequences. Sequence 0 holds the sound effects. Sequence 0x57 points to
-//   sequence 0x28, so the set leaves it out. Sequences 0x01 and 0x6D hold ambience and cutscene effects. They stay
-//   silent until the game's code sets their ports, so the set leaves them out too.
+// - The sequence table at 0x80114220 contains 110 sequences. Sequence 0 contains the sound effects. Sequence 0x57
+//   points to sequence 0x28. The set has no plain track of it, and the track of the file select plays it with port 7
+//   set. Sequences 0x01 and 0x6D contain ambience and cutscene effects. They stay silent until the game's code sets
+//   their ports. The set leaves them out.
 // - The function at 0x800CB2B0 takes a 32-bit command in a0 and queues it for the audio update. Command 0x000000NN
 //   starts sequence NN on sequence player 0. Command 0xE0000000 sets stereo output. Command 0xF00000NN resets the sound
 //   engine to audio set-up NN.
 // - The game thread (entry 0x800A2014) calls the frame function at 0x800A1D68 once a frame. That function ends with a
-//   call of the audio update at 0x800C4490, which reads the queue. Gameplay has a frame of three video fields.
+//   call of the audio update at 0x800C4490. The audio update reads the queue. Gameplay has a frame of three video
+//   fields.
 // - The snapshot takes over the game thread at the frame function's first call. Audio buffers start soon after. The
 //   first calls are quiet. Later ones aren't: the audio thread keeps AI's second buffer waiting.
 // - The game's interrupt manager at 0x8011E038 sends a message to each of its clients at every retrace, at 0x800AD5B4,
@@ -30,7 +31,7 @@
 //   plays in Ganon's Tower, whose set-up is 6. Its minis reset to set-up 6 first, as the game does.
 // - Each room of Ganon's Tower calls the function at 0x800C5CD8 with its level in a0: 7 at the entrance, 6 to 1 on the
 //   way up, and 0 in Ganondorf's lair. The function queues a pan weight for each channel: 0x7F for level 0 and 0 for
-//   the others. For level 7 it sets a timer of 2 frames at 0x80101F50, which the audio update counts down before it
+//   the others. For level 7 it sets a timer of 2 frames at 0x80101F50. The audio update counts the timer down before it
 //   sets the volume. For the other levels it sets the volume at once. The volumes are in the table at 0x80101F48: 0x7F,
 //   0x50, 0x4B, 0x49, 0x46, 0x44, 0x41 and 0x3C for levels 0 to 7. The volume function at 0x800C5D84 scales sequence
 //   player 0, writes a low-pass cutoff to port 4 of channel 15, and gives each channel whose port 5 is set a reverb of
@@ -45,8 +46,8 @@
 // sequences through the sequence's ports, such as Hyrule Field's music for the player's state. The minis of Hyrule
 // Field set its port, as the game does in every frame. The other minis play with the ports unset.
 //
-// Sequence 0x02 picks each part of Hyrule Field's music as it plays. It has no loop, so the length analysis stops it at
-// its limit of 10 minutes.
+// Sequence 0x02 picks each part of Hyrule Field's music as it plays. It has no loop. The length analysis therefore
+// stops it at its limit of 10 minutes.
 
 #include <algorithm>
 #include <cstdint>
@@ -86,51 +87,44 @@ constexpr RetraceClient kRetraceClient = {
     .address = kDriverAddress + 0xC00, .create_queue = 0x800043E0, .add_client = 0x800AD460, .manager = 0x8011E038};
 constexpr uint32_t kRecvMesg = 0x800021F0;
 
-// The sequences that hold ambience and cutscene effects. The set leaves them out.
-constexpr uint32_t kEffectSequences[] = {0x01, 0x6D};
-
-// The set names sequence 0x28 after the Great Fairy's Fountain. ultralib's table names the file select too. The file
-// select has a separate track, through sequence 0x57 (kCommandVersions).
-constexpr SongName kSetSongNames[] = {{0x28, "Great Fairy's Fountain"}};
-
-// The set makes a track for each name in ultralib's table. A new name there adds a track. Compare usfrip --list, then
-// update the count.
-static_assert(ultralib::n64::kOcarinaOfTimeSongNames.size() == 108);
+// The sequences of the table, and those that the set leaves out: the ambience and cutscene effects, and sequence 0x57,
+// which points to sequence 0x28. The track of the file select plays 0x57 (kCommandVersions).
+constexpr uint32_t kSequences = 0x6E;
+constexpr uint32_t kLeftOut[] = {0x01, 0x57, 0x6D};
 
 // Tracks that play a sequence in a state that the game's code sets after the start. Each track's number is the game's
-// command, which the driver's last call queues. The track's mini turns the call for Ganon's Tower into one that fires
-// for the number's low byte and starts the sequence first.
+// command. The driver's last call queues it. The track's mini turns the call for Ganon's Tower into one that fires for
+// the number's low byte and starts the sequence first.
 //
-// - Once a frame, the code at 0x800C7600 queues 0x7002000V, which writes Link's state to port 2 of sequence player 0: 0
-//   when he moves, 1 with enemies near and 2 when he stands still. Sequence 0x02 picks its next part by the port. Runs
-//   of the game with sequence 0x02 in place of the title's music start the same for each value. Later they differ. With
-//   the port unset they differ too. The track for Hyrule Field therefore sets 0.
+// - Once a frame, the code at 0x800C7600 queues 0x7002000V. That command writes Link's state to port 2 of sequence
+//   player 0: 0 when he moves, 1 with enemies near and 2 when he stands still. Sequence 0x02 picks its next part by the
+//   port. Runs of the game with sequence 0x02 in place of the title's music start the same for each value. Later they
+//   differ. With the port unset they differ too. The track for Hyrule Field therefore sets 0.
 // - The function at 0x800C776C sets the volumes of Lon Lon Ranch's channels by Link's distance from Malon: channels 0
-//   and 1 hold her voice, and channel 13 a melody. Within 200 units the melody is at 0. Beyond 2000 units her voice is
+//   and 1 play her voice, and channel 13 a melody. Within 200 units the melody is at 0. Beyond 2000 units her voice is
 //   at 0. That state sounds almost the same as the track without the call. The set leaves it out. Command 0x6003CCVV
 //   sets channel CC's volume to VV over 3 frames.
 // - The function at 0x800C72BC queues a write to a port and then starts a sequence. The file select's code calls it for
 //   sequence 0x57 with 1 for port 7. In a run that pressed Start at the title, the call came at 0x803B3CE8. Sequence
 //   0x57 points to sequence 0x28. With the port at 1, sequence 0x28 leaves out the harp's introduction. The track plays
 //   sequence 0x57, as the game does. The scene's function at 0x800C69CC writes 1 to port 7 for a sequence whose flags
-//   at 0x80101FA4 hold 0x40, and -1 for the rest. The Great Fairy's Fountain plays sequence 0x28 with -1. Runs of the
-//   scene's function with sequence 0x57 patched in at both of its callers, 0x80061F8C and 0x80061FC4, part from the
+//   at 0x80101FA4 contain 0x40, and -1 for the rest. The Great Fairy's Fountain plays sequence 0x28 with -1. Runs of
+//   the scene's function with sequence 0x57 patched in at both of its callers, 0x80061F8C and 0x80061FC4, part from the
 //   start with the port at 1 and at -1. Sequence 0x56, the Chamber of the Sages, has the same flag. The port's value
 //   doesn't change what sequence 0x56 plays. The set has no track for that state.
 struct CommandVersion
 {
     uint32_t sequence;
     uint32_t command;
-    const char* name;
 };
 
-constexpr CommandVersion kHyruleFieldMoving = {0x02, 0x70020000, nullptr};
+constexpr CommandVersion kHyruleFieldMoving = {0x02, 0x70020000};
 
 constexpr CommandVersion kCommandVersions[] = {
-    {0x02, 0x70020001, "Sequence 0x02: Hyrule Field, enemies near"},
-    {0x02, 0x70020002, "Sequence 0x02: Hyrule Field, standing still"},
-    {0x2F, 0x60030D00, "Sequence 0x2F: Lon Lon Ranch, close to Malon"},
-    {0x57, 0x70070001, "Sequence 0x28: file select, without the harp's introduction"},
+    {0x02, 0x70020001}, // Hyrule Field, enemies near.
+    {0x02, 0x70020002}, // Hyrule Field, standing still.
+    {0x2F, 0x60030D00}, // Lon Lon Ranch, close to Malon.
+    {0x57, 0x70070001}, // The file select, without the harp's introduction.
 };
 
 std::vector<RdramPatch> CommandVersionPatches(const Driver& driver, const CommandVersion& version)
@@ -146,21 +140,6 @@ std::vector<RdramPatch> CommandVersionPatches(const Driver& driver, const Comman
 // driver: one turns the call on, and one sets the level.
 constexpr uint32_t kCallOff = 1;
 constexpr uint32_t kEntranceLevel = 7;
-
-// The title of the track for a level of Ganon's Tower.
-std::string TowerLevelName(uint32_t level)
-{
-    if (level == kEntranceLevel)
-    {
-        return "Sequence 0x2E: Ganon's Tower, entrance";
-    }
-    if (level == 0)
-    {
-        return "Sequence 0x2E: Ganon's Tower, Ganondorf's lair";
-    }
-
-    return "Sequence 0x2E: Ganon's Tower, level " + std::to_string(level);
-}
 
 std::vector<RdramPatch> TowerLevelPatches(const Driver& driver, uint32_t level)
 {
@@ -178,7 +157,6 @@ GameProfile NusCzleUsaRev2()
     profile.game = "The Legend of Zelda: Ocarina of Time";
     profile.serial = "NUS-CZLE-USA-rev2";
     profile.sha1 = "41b3bdc48d98c48529219919015a1af22f5057c2";
-    profile.year = "1998";
     profile.cic = ultralib::machine::Cic::k6105;
     profile.sound_driver = "Ocarina of Time sound engine";
     profile.controller = true;
@@ -219,10 +197,9 @@ GameProfile NusCzleUsaRev2()
                                     .match_register = mips::kA1,
                                     .match_value = kSequenceScriptState});
 
-    for (const SongName& song : ultralib::n64::kOcarinaOfTimeSongNames)
+    for (uint32_t number = 1; number < kSequences; number++)
     {
-        const auto number = static_cast<uint32_t>(song.index);
-        if (std::ranges::find(kEffectSequences, number) != std::end(kEffectSequences))
+        if (std::ranges::find(kLeftOut, number) != std::end(kLeftOut))
         {
             continue;
         }
@@ -233,7 +210,7 @@ GameProfile NusCzleUsaRev2()
             {
                 Track track;
                 track.number = kGanonsTower;
-                track.name = TowerLevelName(level);
+                track.name = NumberTitle("Sequence", kGanonsTower, TitleBase::kHex);
                 track.rdram_patches = TowerLevelPatches(*profile.driver, level);
                 profile.tracks.push_back(track);
             }
@@ -242,8 +219,7 @@ GameProfile NusCzleUsaRev2()
 
         Track track;
         track.number = number;
-        track.name = SongTitle("Sequence", number, TitleBase::kHex,
-                               FindSongName(kSetSongNames, ultralib::n64::kOcarinaOfTimeSongNames, number));
+        track.name = NumberTitle("Sequence", number, TitleBase::kHex);
         if (number == kHyruleFieldMoving.sequence)
         {
             track.number = kHyruleFieldMoving.command;
@@ -256,7 +232,7 @@ GameProfile NusCzleUsaRev2()
     {
         Track track;
         track.number = version.command;
-        track.name = version.name;
+        track.name = NumberTitle("Sequence", version.sequence, TitleBase::kHex);
         track.rdram_patches = CommandVersionPatches(*profile.driver, version);
         profile.tracks.push_back(track);
     }

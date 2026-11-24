@@ -5,15 +5,15 @@
 //
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
-// - The sequence file at cartridge offset 0x9B180 holds 26 sequences, in libultra's S2 format. The game reads it to
+// - The sequence file at cartridge offset 0x9B180 contains 26 sequences, in libultra's S2 format. The game reads it to
 //   0x803B8880 at boot. Sequence 19 is the same as sequence 15, and the set leaves it out.
-// - The function at 0x80003100 takes a song's number in a0. It sets the song's volume from the sequence file and asks
-//   for the song. The audio thread calls the function at 0x80002E58 in each audio frame. Once the sequence player has
-//   stopped, that function reads the song's sequence from the cartridge and starts it.
+// - The function at 0x80003100 takes a song's number in a0. It sets the song's volume from the sequence file and
+//   requests the song. The audio thread calls the function at 0x80002E58 in each audio frame. Once the sequence player
+//   has stopped, that function reads the song's sequence from the cartridge and starts it.
 // - The game's main loop waits for the next frame at 0x800568A8. The snapshot takes over the game's thread there, at
 //   its first quiet arrival from the 9th on: 1.60 s after boot. The game has reset its sound by then, and the attract
 //   mode makes no sound until 19.9 s.
-// - The game needs a controller to start the attract mode.
+// - The game requires a controller to start the attract mode.
 // - Two threads read the board through TLB entries that the players refuse: the thread at 0x800A8CE0 at 0x0200000A, and
 //   the thread at 0x800ABFC0 at 0x02000002. The ripper stops both. The music runs in the audio thread.
 // - The sequence reader at 0x8005AFC4 reads one track of a sequence. At 0x8005B17C it has reached the end of a loop,
@@ -51,7 +51,6 @@ GameProfile Aleck64StarSoldier()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "a29348632ed7726d75d693dfb007f277c1f6a563");
     profile.serial = "Aleck64 Star Soldier: Vanishing Earth";
-    profile.year = "1998";
     profile.sound_driver = kCompressedSequencePlayer;
     profile.controller = true;
     profile.board_inputs.switches = kSwitches;

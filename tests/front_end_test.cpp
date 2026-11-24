@@ -54,7 +54,7 @@ bool Open(Playback& playback, const Files& files)
     return playback.Open("set/track.miniusf", ExactReader(files)) && playback.Start();
 }
 
-// Whether `pcm` holds the track's ramp from `first`, frame after frame.
+// Whether `pcm` contains the track's ramp from `first`, frame after frame.
 bool HoldsRamp(const std::vector<int16_t>& pcm, const TestTrack& track, uint64_t first = 0)
 {
     for (size_t i = 0; i < pcm.size() / 2; i++)
@@ -151,15 +151,15 @@ void ConvertsALaterRate()
 
     // A buffer takes the rate at the moment it starts. When the rate changes, the fourth buffer is still waiting behind
     // the third. The first three buffers are therefore the ramp itself.
-    const uint32_t unchanged = 3 * usf::testing::kTestBufferFrames;
-    const std::vector<int16_t> before(pcm.begin(), pcm.begin() + 2 * static_cast<std::ptrdiff_t>(unchanged));
+    const uint32_t kUnchanged = 3 * usf::testing::kTestBufferFrames;
+    const std::vector<int16_t> before(pcm.begin(), pcm.begin() + 2 * static_cast<std::ptrdiff_t>(kUnchanged));
     XSFLIB_CHECK(HoldsRamp(before, track));
 
     // After the change, output frame n is source frame change + (n - change) × second / first, or just before it.
     bool follows = true;
-    for (uint64_t n = unchanged + 2; n < first; n++)
+    for (uint64_t n = kUnchanged + 2; n < first; n++)
     {
-        const uint64_t source = unchanged + (n - unchanged) * second / first;
+        const uint64_t source = kUnchanged + (n - kUnchanged) * second / first;
         const int64_t difference = int64_t{static_cast<uint16_t>(pcm[2 * n])} - static_cast<int64_t>(source);
         follows = follows && std::llabs(difference) <= 2;
     }
@@ -221,7 +221,7 @@ void LoadsLeaveTheFramesAlone()
 }
 
 // A game that sends no buffers at all still plays for its length. Its frames are silence. A render never waits for
-// ever.
+// ever. The length counts from the first sound, and the search for it ends after xsflib's kMaxLeadMs.
 void NoBuffersGiveSilence()
 {
     TestTrack track;
@@ -234,7 +234,8 @@ void NoBuffersGiveSilence()
 
     XSFLIB_CHECK(opened);
     XSFLIB_CHECK(playback.SampleRate() > 0);
-    XSFLIB_CHECK(pcm.size() == 4 * size_t(playback.SampleRate()));
+    constexpr auto kSeconds = static_cast<size_t>(2 + xsflib::player::kMaxLeadMs / 1000);
+    XSFLIB_CHECK(pcm.size() == 2 * kSeconds * size_t(playback.SampleRate()));
     XSFLIB_CHECK(std::all_of(pcm.begin(), pcm.end(), [](int16_t sample) { return sample == 0; }));
 }
 

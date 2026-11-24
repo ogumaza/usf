@@ -6,7 +6,7 @@
 // Addresses come from the game's code in the image and from runs in usf's core.
 //
 // - The game thread calls the function at 0x800039C0 in its main loop. That function also loads and starts the song
-//   that a call of the function at 0x80005130 asked for. Those two functions take the song's level, pan and tempo from
+//   that a call of the function at 0x80005130 requested. Those two functions take the song's level, pan and tempo from
 //   the table at 0x800B3FB0.
 // - The game's first call of the function at 0x800039C0 comes while the system is quiet. The snapshot takes over the
 //   game thread there.
@@ -56,7 +56,7 @@ static_assert(std::ssize(kSongSeconds) == kSongs);
 // These entries of the song table repeat an earlier entry: the same data and the same level, pan and tempo.
 constexpr int kRepeats[] = {30, 31, 48, 49, 50, 51, 52, 53, 54, 55, 56, 58, 59, 61, 64};
 
-// The end of RDRAM. A run of the game holds zeros there.
+// The end of RDRAM. A run of the game leaves zeros there.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
 } // namespace
@@ -67,7 +67,6 @@ GameProfile NusNpneUsa()
     profile.game = "Pokémon Puzzle League";
     profile.serial = "NUS-NPNE-USA";
     profile.sha1 = "8173866fc8c7652abd44c48efcab85441c6806a1";
-    profile.year = "2000";
     profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;

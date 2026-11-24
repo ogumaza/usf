@@ -9,8 +9,9 @@
 #include <span>
 #include <vector>
 
-#include "rip/profile.h"
 #include "ultralib/machine/system.h"
+
+#include "rip/profile.h"
 
 namespace usf::rip
 {
@@ -23,7 +24,7 @@ struct Snapshot
     // The state image at the snapshot.
     std::vector<uint8_t> state;
 
-    // The bytes of the state image that the selector covers: a register's 8 bytes, or the RDRAM word that holds the
+    // The bytes of the state image that the selector covers: a register's 8 bytes, or the RDRAM word that contains the
     // selector's value. Each mini writes them.
     uint32_t selector_offset = 0;
     uint32_t selector_size = 0;

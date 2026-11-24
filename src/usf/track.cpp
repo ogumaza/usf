@@ -6,9 +6,8 @@
 #include <cmath>
 #include <vector>
 
-#include "xsflib/bytes.h"
-
 #include "ultralib/machine/save_state.h"
+#include "xsflib/bytes.h"
 
 namespace usf
 {

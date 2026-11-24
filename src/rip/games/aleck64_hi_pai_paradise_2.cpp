@@ -21,8 +21,8 @@
 // - Each channel of a song loops separately. At 0x8007368C the library has reached the end of a loop, with its count in
 //   v1, the channel in a0 and the loop's depth in a2. A count of 0xFF repeats for ever. At 0x8007383C the library takes
 //   a channel's jump, with the channel in a0. There a2 holds the jump's target. The target is an offset into the
-//   channel's script. Songs 4, 12, 13, 14, 17 and 18 hold no loop. Song 7 plays for 7.6 s and then holds 44 s of
-//   silence before its loop. Its length ends where its second pass stops sounding.
+//   channel's script. Songs 4, 12, 13, 14, 17 and 18 have no loop. Song 7 plays for 7.6 s and then has 44 s of silence
+//   before its loop. Its length ends where its second pass stops sounding.
 // - Numbers 2 and 11 play the same song. The set leaves out 11.
 
 #include "rip/driver.h"
@@ -47,7 +47,7 @@ constexpr uint32_t kGraphicsThread = 0x800C86A0;
 constexpr uint32_t kSongs = 18;
 constexpr uint32_t kSameAsSong2 = 11;
 
-// Runs of the songs measured where each channel's second pass ends. The table holds the latest of those ends.
+// Runs of the songs measured where each channel's second pass ends. The table contains the latest of those ends.
 constexpr SongLength kSongLengths[] = {
     {1, 96.0}, {2, 135.5}, {3, 104.1}, {5, 103.0},  {6, 96.0},   {7, 59.7},
     {8, 48.0}, {9, 136.9}, {10, 64.0}, {15, 119.9}, {16, 101.1},
@@ -60,7 +60,6 @@ GameProfile Aleck64HiPaiParadise2()
     GameProfile profile =
         Aleck64Profile(ultralib::machine::Board::kAleck64, "47fdc89620ddf68972e861dee1536a26a309e35c");
     profile.serial = "Aleck64 Hi Pai Paradise 2";
-    profile.year = "2004";
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.board_inputs.switches = kFactorySwitches;
 

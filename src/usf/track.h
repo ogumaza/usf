@@ -8,6 +8,7 @@
 #include <span>
 
 #include "ultralib/machine/system.h"
+
 #include "usf/usf_file.h"
 
 namespace usf
@@ -20,12 +21,13 @@ namespace usf
 ultralib::machine::Options TrackOptions(std::span<const uint8_t> state, bool enable_compare, bool enable_fifo_full);
 ultralib::machine::Options TrackOptions(const LoadedUsf& track);
 
-// Loads `rom` (console byte order) and then `state` into `system`, which TrackOptions made.
+// Loads `rom` (console byte order) and then `state` into `system`. `system` must have been made with the options of
+// TrackOptions.
 void StartTrack(ultralib::machine::System& system, std::span<const uint8_t> rom, std::span<const uint8_t> state);
 
 // Keeps a track's output in time with the emulated time. The output is the concatenation of the game's buffers. A game
-// that stops sending them for longer than kStallSeconds gets silence for the time that it stopped, so that time goes on
-// in the output too. A player runs the core in slices of SliceTicks, and asks for the silence after each one.
+// that stops sending them for longer than kStallSeconds gets silence for the time that it stopped. Time then goes on in
+// the output too. A player runs the core in slices of SliceTicks, and takes the silence after each one.
 class OutputClock
 {
 public:
@@ -40,8 +42,8 @@ public:
     // The game started a buffer of `frames` frames at `rate` at `now`.
     void OnBuffer(uint64_t frames, uint32_t rate, uint64_t now, uint64_t ticks_per_second);
 
-    // The frames of silence at `rate` that the output needs after a slice that ended at `now`. It's 0 unless the output
-    // has stalled.
+    // The frames of silence at `rate` that the output requires after a slice that ended at `now`. It's 0 unless the
+    // output has stalled.
     uint64_t TakeSilence(uint64_t now, uint32_t rate, uint64_t ticks_per_second);
 
 private:

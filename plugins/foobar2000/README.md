@@ -10,11 +10,16 @@ both are installed, foobar2000 uses one of them for these files. Remove the othe
 
 - Like other PSF-family components, the component shows tags as metadata: `game` as album, `year` as date, and
   `replaygain_*` as ReplayGain. Tags can be edited. Editing rewrites the tag area and keeps `_lib`, the flags, `length`,
-  `fade` and `volume`.
+  `fade`, `loop_start`, `loop_length` and `volume`.
 - Length and fade come from the `length` and `fade` tags. Files without a length tag play for the default length and
   fade.
-- Advanced preferences › Decoding › USF decoder (usfplay): default length and fade, endless playback, and rendering
-  ahead. Endless playback and rendering ahead apply to playback only, never to conversion or scanning.
+- Each track plays as a soundtrack album plays it: from the first sound, after 0.5 s of silence, with 1 s of silence
+  after it. A loop plays the passes in its tags, or another number of passes with its `loop_start` and `loop_length`
+  tags.
+- Advanced preferences › Decoding › USF decoder (usfplay): default length and fade, the fade's curve, endless playback,
+  rendering ahead, and the settings of an album's track: skip silence at the start, the silences before and after a
+  track, the loops, one pass for long loops, the fade length for loops, ignore length and fade tags, and skip silence
+  at the end. Endless playback and rendering ahead apply to playback only, never to conversion or scanning.
 - During playback, the component renders ahead on a separate thread as fast as the CPU allows. It buffers up to 10
   minutes and 10 seconds of audio. Seeking within the buffer is instant. Seeking further ahead waits for rendering to
   reach the requested position. Seeking back before the buffered audio renders again from the start of the track.
@@ -66,6 +71,6 @@ faster than a 32-bit one. Use 64-bit foobar2000 and the 64-bit component if your
 
 ## Licence
 
-Like the rest of usf, the component is MIT-licensed. It contains xsflib (MIT) and code adapted from Iconoclast's RSP
-(CC0 1.0), and uses zlib. Ship `LICENSE` and `THIRD-PARTY-NOTICES.md` (or their text) with a build. Nothing in the
-component is GPL. It can therefore be distributed as a foobar2000 component.
+Like the rest of usf, the component is MIT-licensed. It contains xsflib and ultralib (both MIT) and uses zlib. ultralib
+includes code adapted from Iconoclast's RSP (CC0 1.0). Ship `LICENSE` and `THIRD-PARTY-NOTICES.md` (or their text) with
+a build. Nothing in the component is GPL. It can therefore be distributed as a foobar2000 component.

@@ -6,10 +6,11 @@
 // Addresses come from the game's code in the image and from runs in usf's core. The main segment is copied from
 // cartridge offset 0x1000 to 0x80000400.
 //
-// - The sequence table at cartridge offset 0xBC5F60 holds 30 sequences. The audio set-up at 0x800C5C40 starts sequence
-//   0 on sequence player 2 (through 0x800C284C, at 0x800C5C94), for the sound effects. The other 29 are the tracks.
+// - The sequence table at cartridge offset 0xBC5F60 contains 30 sequences. The audio set-up at 0x800C5C40 starts
+//   sequence 0 on sequence player 2 (through 0x800C284C, at 0x800C5C94), for the sound effects. The other 29 are the
+//   tracks.
 // - The play-sequence function at 0x800C8EAC takes a sequence's number in a0. It queues command 0x00010000 with the
-//   number through 0x800C3448, which starts the sequence on sequence player 0.
+//   number through 0x800C3448. That command starts the sequence on sequence player 0.
 // - The game-loop tick at 0x800CB2C4 takes no arguments. It sends the queued commands to the audio thread through
 //   0x800CBC24. The game thread (0x801589D0, created at 0x800024F4) calls it from its loop at 0x8000277C, once a frame,
 //   every second video field.
@@ -20,7 +21,7 @@
 // - The reader handles the end of a counted loop (command 0xF7) at 0x800C0C0C and the relative jumps (commands 0xF2 to
 //   0xF4) at 0x800C0CAC. The watch below doesn't see them.
 // - The game's main thread (0x80154670, priority 100) sends a message at each retrace, at 0x8000226C, to the queue that
-//   the word at 0x800DC4A4 points to: 0x8014EF70. It sends it whether the game draws or not. The queue holds one
+//   the word at 0x800DC4A4 points to: 0x8014EF70. It sends it whether the game draws or not. The queue has room for one
 //   message and is empty at the snapshot. The game thread (priority 10) waits for two of them in each frame, at
 //   0x80000F90 and 0x80000FDC, through osRecvMesg at 0x800CD750. Only the idle thread (0x801524C0, priority 0) has a
 //   lower priority. Its loop at 0x800005B8 is a branch to itself.
@@ -41,7 +42,7 @@ constexpr uint32_t kRecvMesg = 0x800CD750;
 constexpr uint32_t kRetraceQueue = 0x8014EF70;
 constexpr uint32_t kSequenceJump = 0x800C0CA4;
 
-// The last lines of the frame buffer at 0x803DA800 to 0x80400000. Runs of the game hold zeros there. Only the RDP
+// The last lines of the frame buffer at 0x803DA800 to 0x80400000. Runs of the game leave zeros there. Only the RDP
 // writes there, and it draws nothing after the snapshot.
 constexpr uint32_t kDriverAddress = 0x803FF000;
 
@@ -50,16 +51,13 @@ constexpr uint32_t kSequences = 30;
 // Sequence 0 contains the sound effects.
 constexpr uint32_t kFirstMusic = 1;
 
-// The length analysis follows the part that loops last. Sequence player 2 runs the sound effects' script, which jumps
-// back every 207.7 s. That gave 0x10 a length of 415.5 s and 0x12 the limit of 600 s. Runs with watches on every loop
-// command of the scripts measured where the music's second pass ends:
+// The length analysis follows the part that loops last. Sequence player 2 runs the sound effects' script. That script
+// jumps back every 207.7 s. Its jumps gave 0x10 a length of 415.5 s and 0x12 the limit of 600 s. Runs with watches on
+// every loop command of the scripts measured where the music's second pass ends:
 // - 0x10 loops through one of the commands that the watch doesn't see, every 49.36 s from 49.43 s. Its music alternates
-//   two passes, so it repeats every 98.72 s, from the start.
+//   two passes. It therefore repeats every 98.72 s, from the start.
 // - 0x12 jumps back every 131.80 s from 131.85 s.
 constexpr SongLength kTrackLengths[] = {{0x10, 197.5}, {0x12, 263.6}};
-
-// The names of the songs that have one.
-constexpr SongName kSongNames[] = {{0x01, "title screen"}};
 
 } // namespace
 
@@ -69,7 +67,6 @@ GameProfile NusNkteUsa()
     profile.game = "Mario Kart 64";
     profile.serial = "NUS-NKTE-USA";
     profile.sha1 = "579c48e211ae952530ffc8738709f078d5dd215e";
-    profile.year = "1997";
     profile.cic = ultralib::machine::Cic::k6102;
     profile.sound_driver = kSuperMario64SoundEngine;
     profile.controller = true;
@@ -92,13 +89,13 @@ GameProfile NusNkteUsa()
     driver.fields = 2;
     profile.driver = BuildCallDriver(driver);
 
-    // The sequence players run separate scripts. The player's address in s1 tells their jumps apart.
+    // The sequence players run separate scripts. The player's address in s1 distinguishes their jumps.
     profile.loop_watches.push_back(
         {.address = kSequenceJump, .target_register = mips::kT3, .track_register = mips::kS1});
 
     for (uint32_t index = kFirstMusic; index < kSequences; index++)
     {
-        profile.tracks.push_back(NamedOrNumberedTrack(index, kSongNames, "Sequence", TitleBase::kHex, kTrackLengths));
+        profile.tracks.push_back(NumberedTrack(index, NumberTitle("Sequence", index, TitleBase::kHex), kTrackLengths));
     }
 
     return profile;

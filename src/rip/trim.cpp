@@ -103,12 +103,12 @@ SetSections BuildSet(const Snapshot& snapshot, const std::vector<Track>& tracks,
     }
     else
     {
-        // The library holds the state's value for every word of RDRAM, whether a run read it or not. The legacy
+        // The library contains the state's value for every word of RDRAM, whether a run read it or not. The legacy
         // players' timing can reach RDRAM words that the core's runs never read. A word that is zero takes no chunk: a
         // player fills the state image with zeros before it loads the library.
         set.library.state = StateChunksWithoutZeroWords(snapshot.state);
 
-        // Every ROM word that a track read goes in the library. A mini holds only its selector and its patches.
+        // Every ROM word that a track read goes in the library. A mini contains only its selector and its patches.
         WordSet read = words->front().rom;
         for (const TrackWords& track : *words)
         {

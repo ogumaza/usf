@@ -20,7 +20,20 @@ using enum ultralib::machine::mips::Register;
 
 inline constexpr uint32_t kNop = 0;
 
-// Encodes one instruction. Immediates are the 16 bits that the instruction holds.
+// An instruction of the I-type format from its fields: the opcode, rs, rt and the 16 bits of the immediate.
+inline constexpr uint32_t IType(uint32_t op, uint32_t rs, uint32_t rt, uint16_t immediate)
+{
+    return op << 26 | rs << 21 | rt << 16 | immediate;
+}
+
+// An instruction of the SPECIAL group (R-type, opcode 0) from its fields: rs, rt, rd, the shift amount and the function
+// code.
+inline constexpr uint32_t RType(uint32_t rs, uint32_t rt, uint32_t rd, uint32_t shift, uint32_t funct)
+{
+    return rs << 21 | rt << 16 | rd << 11 | (shift & 0x1F) << 6 | funct;
+}
+
+// Encodes one instruction. Immediates are the 16 bits of the instruction.
 uint32_t Lui(Register rt, uint16_t immediate);
 uint32_t Ori(Register rt, Register rs, uint16_t immediate);
 uint32_t Addiu(Register rt, Register rs, uint16_t immediate);
@@ -37,7 +50,7 @@ uint32_t Sltu(Register rd, Register rs, Register rt);
 uint32_t Jr(Register rs);
 uint32_t Jalr(Register rd, Register rs);
 
-// The upper and lower halves of an address for a LUI and a following load, store or ADDIU, which sign-extend the lower
+// The upper and lower halves of an address for a LUI and a following load, store or ADDIU. Those sign-extend the lower
 // half.
 uint16_t High(uint32_t address);
 uint16_t Low(uint32_t address);
@@ -56,7 +69,7 @@ public:
     // Puts `value` in `rd`, sign-extended from 32 bits, with one instruction or two.
     void LoadImmediate(Register rd, uint32_t value);
 
-    // Branches and jumps to `target`. Each is followed by its delay slot, which the caller emits.
+    // Branches and jumps to `target`. Each is followed by its delay slot. The caller emits the delay slot.
     void Beq(Register rs, Register rt, uint32_t target);
     void Bne(Register rs, Register rt, uint32_t target);
     void J(uint32_t target);

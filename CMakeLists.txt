@@ -1,24 +1,18 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(usf VERSION 1.2.3 LANGUAGES C CXX)
+project(usf VERSION 1.3.0 LANGUAGES C CXX)
 
-# xsflib is a library for players and rippers of the PSF family. It's a submodule. Its XsflibProject.cmake sets what a
-# project built on it starts with: C++20, a release build by default, the static C runtime, the options that keep the
-# output the same on every platform, and the warnings for usf's targets (USF_WARNINGS). It refuses the compilers whose
-# output would differ from other builds.
+# xsflib is a library for players and rippers of the PSF family. It's a submodule. XsflibProject.cmake in xsflib sets
+# what a project built on xsflib starts with: C++20, a release build by default, the static C runtime, the options that
+# keep the output the same on every platform, and the warnings for usf's targets (USF_WARNINGS). It refuses the
+# compilers whose output would differ from other builds.
 if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
     message(FATAL_ERROR "externals/xsflib is missing. Clone with git clone --recursive, or run "
                         "git submodule update --init --recursive in a clone.")
 endif()
 include(externals/xsflib/cmake/XsflibProject.cmake)
 xsflib_project(CHECK_COMPILERS NAME usf PREFIX USF)
-
-# clang-cl warns of designated initializers that leave fields out, as the game profiles do. Filling in every field would
-# copy non-zero defaults into each initializer, where they can drift.
-if (USF_CLANG_CL)
-    list(APPEND USF_WARNINGS -Wno-missing-designated-field-initializers)
-endif()
 
 # The game profiles have text outside ASCII. MSVC reads source files as UTF-8 only with /utf-8.
 if (MSVC)
@@ -34,10 +28,9 @@ xsflib_add_libraries(xsflib)
 option(USF_TESTS "Build usf's tests and register them with CTest." ON)
 
 # The emulator core: the VR4300, the RSP, the RCP's interfaces, the PIF, boot, save states and coverage. ultralib is a
-# submodule. Its core (ultralib::machine) requires only xsflib. The sound modules, which require ntdlib, stay off. The
-# ripper takes the Aleck64 sets from ultralib::rom_set and the song names from ultralib/n64/song_names.h, a header
-# that requires only the standard library. With USF_TESTS, the core's unit tests build and run with usf's, on each
-# platform that usf builds for.
+# submodule. Its core (ultralib::machine) requires only xsflib. The sound modules require ntdlib, and they stay off. The
+# ripper takes the Aleck64 sets from ultralib::rom_set. With USF_TESTS, the core's unit tests build and run with usf's,
+# on each platform that usf builds for.
 if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ultralib/CMakeLists.txt")
     message(FATAL_ERROR "externals/ultralib is missing. Clone with git clone --recursive, or run "
                         "git submodule update --init --recursive in a clone.")
@@ -142,12 +135,14 @@ target_link_libraries(n64run PRIVATE usf_format)
 target_compile_options(n64run PRIVATE ${USF_WARNINGS})
 xsflib_add_utf8_manifest(n64run)
 
-# usfrip rips a game's music into a USF set, with the game's profile. On Windows, its code page is UTF-8.
+# usfrip rips a game's music into a USF set, with the game's profile. On Windows, its code page is UTF-8. A 32-bit
+# Windows build of usfrip is large-address-aware. It can then use more than 2 GB.
 add_executable(usfrip src/tools/usfrip.cpp)
 target_link_libraries(usfrip PRIVATE usf_rip xsflib::console)
 target_compile_options(usfrip PRIVATE ${USF_WARNINGS})
 xsflib_add_version(usfrip VERSION ${usf_VERSION} DEFINE USF_VERSION DESCRIPTION "USF ripper" PRODUCT usf)
 xsflib_add_utf8_manifest(usfrip)
+xsflib_large_address_aware(usfrip)
 
 # usfplay renders USF tracks to WAV or FLAC files. On Windows, its code page is UTF-8. On macOS, a droplet app takes files
 # dropped on it in the Finder.
@@ -182,11 +177,14 @@ if (USF_TESTS)
     xsflib_add_project_test(usf usf_file usf_write)
     xsflib_add_project_test(usf mips usf_rip)
     xsflib_add_project_test(usf rip usf_rip)
+    xsflib_add_project_test(usf rip_timing usf_rip)
     xsflib_add_project_test(usf player usf_rip)
+    xsflib_add_project_test(usf profiles usf_rip)
 
     # On Windows, UTF-8 is the code page of the tests that open files by a narrow path, and of the programs that take
     # paths on the command line. A temporary or build folder can then have a name outside ASCII.
     xsflib_add_utf8_manifest(usf_rip_test)
+    xsflib_add_utf8_manifest(usf_rip_timing_test)
     xsflib_add_utf8_manifest(usf_player_test)
 
     # A USF set made from small programs, with no game data. The tests of the front ends play it.

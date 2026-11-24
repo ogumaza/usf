@@ -37,7 +37,7 @@ constexpr uint32_t kDriverAddress = 0x803FF000;
 constexpr uint32_t kLastSong = 0x4B;
 
 // Each channel of a song loops separately, often at another period. Runs of the songs measured where each channel's
-// second pass ends. The table holds the latest of those ends.
+// second pass ends. The table contains the latest of those ends.
 constexpr SongLength kSongLengths[] = {
     {0x01, 175.1}, {0x02, 111.0}, {0x03, 265.5}, {0x04, 146.2}, {0x05, 196.7}, {0x06, 268.4}, {0x07, 58.1},
     {0x08, 73.7},  {0x09, 82.0},  {0x0A, 22.0},  {0x0B, 199.1}, {0x0C, 137.4}, {0x0D, 203.4}, {0x0E, 230.8},
@@ -57,7 +57,6 @@ GameProfile NusNpoeUsaRev2()
     profile.game = "Pokémon Stadium";
     profile.serial = "NUS-NPOE-USA-rev2";
     profile.sha1 = "0d3b1d740c6ee6da6923550bf24ad827262fd8c0";
-    profile.year = "2000";
     profile.cic = ultralib::machine::Cic::k6103;
     profile.sound_driver = kSoftwareCreationsLibrary;
     profile.controller = true;

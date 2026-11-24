@@ -25,8 +25,8 @@ namespace usf::rip
 {
 
 // One argument of a call: the constant `value`, or with `track` set, the track's number shifted left by `shift` and
-// ORed with `value`. A track's number may hold two fields: `right_shift` and `mask` pick one out before the left shift.
-// With `result` set, the argument is the value that the previous call returned.
+// ORed with `value`. A track's number may contain two fields: `right_shift` and `mask` pick one out before the left
+// shift. With `result` set, the argument is the value that the previous call returned.
 struct CallArgument
 {
     uint32_t value = 0;
@@ -77,17 +77,17 @@ struct CallDriverOptions
 };
 
 // A wait call: the game's osRecvMesg at `recv_mesg`, called with the queue at `queue`, no message pointer and
-// OS_MESG_BLOCK. It returns once the queue holds a message, and drops the message.
+// OS_MESG_BLOCK. It returns once the queue contains a message, and drops the message.
 GameCall MessageWait(uint32_t recv_mesg, uint32_t queue);
 
 // A start call that drops a message that waits in the queue at `queue`, through the game's osRecvMesg at `recv_mesg`
 // with OS_MESG_NOBLOCK. It returns at once, with or without one. The last start call can drop a message that came
-// before the first frame, so that the first wait doesn't return at once.
+// before the first frame. The first wait then doesn't return at once.
 GameCall MessageDrop(uint32_t recv_mesg, uint32_t queue);
 
-// A message queue that the driver adds to the clients of a game's retrace manager, for a game whose retrace queues
-// all have threads of their own that wait on them. The manager sends a message to each client at every retrace. The
-// queue holds one message. It takes 24 bytes at `address`, its message buffer the 4 bytes after it, and the client's
+// A message queue that the driver adds to the clients of a game's retrace manager, for a game whose retrace queues all
+// have threads of their own that wait on them. The manager sends a message to each client at every retrace. The queue
+// has room for one message. It takes 24 bytes at `address`, its message buffer the 4 bytes after it, and the client's
 // record of two words the 8 bytes after that: 36 bytes in all, in RDRAM that the game never uses.
 struct RetraceClient
 {
@@ -110,8 +110,8 @@ std::vector<GameCall> AddRetraceClient(const RetraceClient& client);
 // word-aligned, or a driver that runs past its end.
 Driver BuildCallDriver(const CallDriverOptions& options);
 
-// The patch that replaces the one word of the driver's code that holds `word`. Throws std::logic_error if the code
-// doesn't contain `word` exactly once.
+// The patch that replaces the one word of the driver's code that is `word`. Throws std::logic_error if the code doesn't
+// contain `word` exactly once.
 RdramPatch DriverWordPatch(const Driver& driver, uint32_t word, uint32_t replacement);
 
 } // namespace usf::rip
